@@ -15,7 +15,8 @@ export default function VideoPlayer({ src, selectedVideo }) {
       });
 
       player.on("ended", () => {
-        window.location.href = "https://www.pestorspointers.com";
+        window.location.href =
+          "https://www.pestorspointers.com/course-offerings-page";
       });
     }
   }, [videoUrl]);
