@@ -4,6 +4,7 @@ import VideoPlayer from "./VideoPlayer";
 import { Typography, Paper, List, ListItem, Box } from "@mui/material";
 import quizData from "../data/quizData";
 import videoData from "../data/videoData";
+import Logo from "../assets/logo.png";
 
 export default function Result({ answers = {}, userValue }) {
   const [showBlurb, setShowBlurb] = useState(true);
@@ -18,7 +19,14 @@ export default function Result({ answers = {}, userValue }) {
   if (userValue >= 1 && userValue <= 6) {
     const video = videoData.find((v) => v.id === userValue);
     return (
-      <Box sx={{ mt: 5 }}>
+      <Box
+        sx={{
+          mt: 5,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+        }}
+      >
         <VideoPlayer src={video?.url} />
         {showBlurb && (
           <Typography variant="h6" sx={{ mb: 2, textAlign: "center" }}>
@@ -26,6 +34,12 @@ export default function Result({ answers = {}, userValue }) {
             redirected to the next page
           </Typography>
         )}
+        <img
+          src={Logo}
+          width="25%"
+          alt="Siting logo"
+          style={{ margin: "15px" }}
+        />
       </Box>
     );
   }
