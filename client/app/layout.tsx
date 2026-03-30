@@ -6,8 +6,17 @@ import { Providers } from "./providers";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Life Coach Platform",
-  description: "Transform your life with expert coaching",
+  title: {
+    default: "Pestor's Pointers",
+    template: "%s | Pestor's Pointers",
+  },
+  description:
+    "I can help you find your purpose, place in this world & true fulfillment. Let's get unstuck — step into the life you were destined to live.",
+  metadataBase: new URL(process.env.NEXTAUTH_URL ?? 'https://pestorspointers.com'),
+  openGraph: {
+    siteName: "Pestor's Pointers",
+    type: 'website',
+  },
 };
 
 export default function RootLayout({

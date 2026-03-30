@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /billing
+Disallow: /watch
+
+Sitemap: https://pestorspointers.com/sitemap.xml
