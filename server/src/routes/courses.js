@@ -3,7 +3,7 @@ import { authenticate } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import Course from '../models/Course.js';
 import User from '../models/User.js';
-import stripe from '../services/stripe.js';
+import getStripe from '../services/stripe.js';
 
 const router = Router();
 
@@ -13,6 +13,13 @@ router.get('/', async (_req, res) => {
   const courses = await Course.find({ isPublished: true })
     .select('slug title description thumbnailUrl price videoIds createdAt')
     .sort({ createdAt: -1 });
+  res.json(courses);
+});
+
+// ─── ADMIN: list all courses — must be before /:slug to avoid wildcard match ──
+
+router.get('/admin/all', authenticate, requireAdmin, async (_req, res) => {
+  const courses = await Course.find().sort({ createdAt: -1 });
   res.json(courses);
 });
 
@@ -56,7 +63,7 @@ router.post('/:id/checkout', async (req, res) => {
   // Auto-create Stripe customer if needed
   let customerId = user.stripeCustomerId;
   if (!customerId) {
-    const customer = await stripe.customers.create({ email: user.email });
+    const customer = await getStripe().customers.create({ email: user.email });
     customerId = customer.id;
     await User.findByIdAndUpdate(user._id, { stripeCustomerId: customerId });
   }
@@ -65,7 +72,7 @@ router.post('/:id/checkout', async (req, res) => {
   let priceId;
   if (course.stripeProductId) {
     // Retrieve existing prices for this product and use the first active one
-    const prices = await stripe.prices.list({
+    const prices = await getStripe().prices.list({
       product: course.stripeProductId,
       active: true,
       limit: 1,
@@ -74,7 +81,7 @@ router.post('/:id/checkout', async (req, res) => {
       priceId = prices.data[0].id;
     } else {
       // Create a new price for this product
-      const price = await stripe.prices.create({
+      const price = await getStripe().prices.create({
         product: course.stripeProductId,
         currency: 'usd',
         unit_amount: Math.round(course.price * 100),
@@ -83,11 +90,11 @@ router.post('/:id/checkout', async (req, res) => {
     }
   } else {
     // Create product + price together
-    const product = await stripe.products.create({
+    const product = await getStripe().products.create({
       name: course.title,
       description: course.description,
     });
-    const price = await stripe.prices.create({
+    const price = await getStripe().prices.create({
       product: product.id,
       currency: 'usd',
       unit_amount: Math.round(course.price * 100),
@@ -96,7 +103,7 @@ router.post('/:id/checkout', async (req, res) => {
     priceId = price.id;
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     customer: customerId,
     payment_method_types: ['card'],
     line_items: [{ price: priceId, quantity: 1 }],
@@ -116,13 +123,6 @@ router.post('/:id/checkout', async (req, res) => {
 // ─── ADMIN routes below ───────────────────────────────────────────────────────
 
 router.use(requireAdmin);
-
-// ADMIN: list all courses (including drafts)
-
-router.get('/admin/all', async (_req, res) => {
-  const courses = await Course.find().sort({ createdAt: -1 });
-  res.json(courses);
-});
 
 // ADMIN: create course + auto-create Stripe Product
 
@@ -144,7 +144,7 @@ router.post('/', async (req, res) => {
   }
 
   // Create Stripe Product
-  const product = await stripe.products.create({
+  const product = await getStripe().products.create({
     name: title,
     description,
   });
@@ -184,7 +184,7 @@ router.patch('/:id', async (req, res) => {
     if (updateFields.description && updateFields.description !== course.description)
       stripeUpdate.description = updateFields.description;
     if (Object.keys(stripeUpdate).length > 0) {
-      await stripe.products.update(course.stripeProductId, stripeUpdate);
+      await getStripe().products.update(course.stripeProductId, stripeUpdate);
     }
   }
 
@@ -229,7 +229,7 @@ router.delete('/:id', async (req, res) => {
 
   // Archive the Stripe product so existing customers aren't affected
   if (course.stripeProductId) {
-    await stripe.products.update(course.stripeProductId, { active: false }).catch(() => {});
+    await getStripe().products.update(course.stripeProductId, { active: false }).catch(() => {});
   }
 
   await course.deleteOne();

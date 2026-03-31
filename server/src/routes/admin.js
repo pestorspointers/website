@@ -19,16 +19,23 @@ router.patch('/users/:id/role', async (req, res) => {
     res.status(400).json({ error: 'Invalid role' });
     return;
   }
-  const user = await User.findByIdAndUpdate(
-    req.params.id,
-    { role },
-    { new: true }
-  ).select('-passwordHash');
-  if (!user) {
+  const target = await User.findById(req.params.id);
+  if (!target) {
     res.status(404).json({ error: 'User not found' });
     return;
   }
-  res.json(user);
+  if (target.role === 'admin' && role !== 'admin') {
+    const adminCount = await User.countDocuments({ role: 'admin' });
+    if (adminCount <= 1) {
+      res.status(400).json({ error: 'At least one admin must remain' });
+      return;
+    }
+  }
+  target.role = role;
+  await target.save();
+  const updated = target.toObject();
+  delete updated.passwordHash;
+  res.json(updated);
 });
 
 export default router;

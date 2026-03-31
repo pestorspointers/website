@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import stripeClient from '../services/stripe.js';
+import getStripe from '../services/stripe.js';
 import User from '../models/User.js';
 import SubscriptionTier from '../models/SubscriptionTier.js';
 import mongoose from 'mongoose';
@@ -37,7 +37,7 @@ router.post('/stripe', async (req, res) => {
 
   let event;
   try {
-    event = stripeClient.webhooks.constructEvent(req.body, sig, webhookSecret);
+    event = getStripe().webhooks.constructEvent(req.body, sig, webhookSecret);
   } catch {
     res.status(400).json({ error: 'Invalid webhook signature' });
     return;

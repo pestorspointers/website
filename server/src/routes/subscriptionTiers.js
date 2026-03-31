@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import SubscriptionTier from '../models/SubscriptionTier.js';
-import stripe from '../services/stripe.js';
+import getStripe from '../services/stripe.js';
 
 const router = Router();
 router.use(authenticate, requireAdmin);
@@ -20,9 +20,9 @@ router.post('/', async (req, res) => {
     return;
   }
 
-  const product = await stripe.products.create({ name, description });
+  const product = await getStripe().products.create({ name, description });
 
-  const monthlyPrice = await stripe.prices.create({
+  const monthlyPrice = await getStripe().prices.create({
     product: product.id,
     currency: 'usd',
     unit_amount: Math.round(prices.monthly * 100),
@@ -31,7 +31,7 @@ router.post('/', async (req, res) => {
 
   let annualPriceId;
   if (prices.annual) {
-    const annualPrice = await stripe.prices.create({
+    const annualPrice = await getStripe().prices.create({
       product: product.id,
       currency: 'usd',
       unit_amount: Math.round(prices.annual * 100),
@@ -69,7 +69,7 @@ router.patch('/:id', async (req, res) => {
     const activeChanged = typeof isActive === 'boolean' && isActive !== tier.isActive;
 
     if (nameChanged || descChanged || activeChanged) {
-      await stripe.products.update(tier.stripeProductId, {
+      await getStripe().products.update(tier.stripeProductId, {
         ...(nameChanged && { name }),
         ...(descChanged && { description }),
         ...(activeChanged && { active: isActive }),
@@ -101,7 +101,7 @@ router.delete('/:id', async (req, res) => {
   }
 
   if (tier.stripeProductId) {
-    await stripe.products.update(tier.stripeProductId, { active: false });
+    await getStripe().products.update(tier.stripeProductId, { active: false });
   }
 
   await SubscriptionTier.findByIdAndUpdate(req.params.id, { isActive: false });

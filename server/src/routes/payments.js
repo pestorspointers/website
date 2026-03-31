@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate.js';
-import stripe from '../services/stripe.js';
+import getStripe from '../services/stripe.js';
 import User from '../models/User.js';
 import SubscriptionTier from '../models/SubscriptionTier.js';
 
@@ -47,12 +47,12 @@ router.post('/create-checkout-session', async (req, res) => {
 
   let customerId = user.stripeCustomerId;
   if (!customerId) {
-    const customer = await stripe.customers.create({ email: user.email });
+    const customer = await getStripe().customers.create({ email: user.email });
     customerId = customer.id;
     await User.findByIdAndUpdate(user._id, { stripeCustomerId: customerId });
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     customer: customerId,
     payment_method_types: ['card'],
     line_items: [{ price: priceId, quantity: 1 }],
@@ -75,7 +75,7 @@ router.post('/create-portal-session', async (req, res) => {
     return;
   }
 
-  const session = await stripe.billingPortal.sessions.create({
+  const session = await getStripe().billingPortal.sessions.create({
     customer: user.stripeCustomerId,
     return_url: `${process.env.CLIENT_URL}/dashboard`,
   });
