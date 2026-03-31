@@ -3,19 +3,27 @@ import { useState } from "react";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import GetUserCount from "@/components/GetUserCount";
+import GetVideoCount from "@/components/GetVideoCount";
+import GetSubCount from "@/components/GetSubCount";
 
 export default function AdminDashboardPage() {
   const [userCount, setUserCount] = useState(0);
 
-  console.log(userCount);
-
   return (
-    <div>
-      <h1 className="text-3xl font-bold mb-1">Admin Dashboard</h1>
-      <div>
-        <GetUserCount setUserCount={setUserCount} />
+    <>
+      <h1 className="text-3xl font-bold mb-1 gap-4">Admin Dashboard</h1>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <GetUserCount setUserCount={setUserCount} />
+        </div>
+        <div>
+          <GetVideoCount />
+        </div>
+        <div>
+          <GetSubCount />
+        </div>
       </div>
-    </div>
+    </>
 
     // <div>
     //   <p className="text-gray-500 mb-8">Logged in as {session.user.email}</p>
