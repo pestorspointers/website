@@ -1,46 +1,33 @@
-async function fetchSlugs(url, key) {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    const items = key ? (data[key] ?? []) : data;
-    return items.map((item) => item.slug);
-  } catch {
-    return [];
-  }
-}
+import { apiGet } from '@/lib/serverApi';
+
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
 
 export default async function sitemap() {
-  const base = process.env.NEXTAUTH_URL ?? 'https://pestorspointers.com';
-  const api = process.env.API_URL ?? '';
-
-  const [courseSlugs, postSlugs] = await Promise.all([
-    fetchSlugs(`${api}/api/v1/courses`),
-    fetchSlugs(`${api}/api/v1/blog?limit=200`, 'posts'),
+  const [courses, blog] = await Promise.all([
+    apiGet('/api/v1/courses', { revalidate: 3600, fallback: [] }),
+    apiGet('/api/v1/blog?limit=50', { revalidate: 3600, fallback: { posts: [] } }),
   ]);
 
-  const staticRoutes = [
-    { url: base, lastModified: new Date(), changeFrequency: 'weekly', priority: 1 },
-    { url: `${base}/courses`, lastModified: new Date(), changeFrequency: 'daily', priority: 0.9 },
-    { url: `${base}/blog`, lastModified: new Date(), changeFrequency: 'daily', priority: 0.8 },
-    { url: `${base}/about`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.7 },
-    { url: `${base}/contact`, lastModified: new Date(), changeFrequency: 'yearly', priority: 0.5 },
-    { url: `${base}/billing`, lastModified: new Date(), changeFrequency: 'weekly', priority: 0.6 },
-  ];
-
-  const courseRoutes = courseSlugs.map((slug) => ({
-    url: `${base}/courses/${slug}`,
+  const staticPages = ['', '/about', '/contact', '/courses', '/blog'].map((path) => ({
+    url: `${SITE_URL}${path}`,
     lastModified: new Date(),
     changeFrequency: 'weekly',
-    priority: 0.8,
+    priority: path === '' ? 1 : 0.8,
   }));
 
-  const postRoutes = postSlugs.map((slug) => ({
-    url: `${base}/blog/${slug}`,
-    lastModified: new Date(),
+  const coursePages = (courses ?? []).map((course) => ({
+    url: `${SITE_URL}/courses/${course.slug}`,
+    lastModified: course.updatedAt ? new Date(course.updatedAt) : new Date(),
     changeFrequency: 'weekly',
     priority: 0.7,
   }));
 
-  return [...staticRoutes, ...courseRoutes, ...postRoutes];
+  const postPages = (blog?.posts ?? []).map((post) => ({
+    url: `${SITE_URL}/blog/${post.slug}`,
+    lastModified: post.publishedAt ? new Date(post.publishedAt) : new Date(),
+    changeFrequency: 'monthly',
+    priority: 0.6,
+  }));
+
+  return [...staticPages, ...coursePages, ...postPages];
 }

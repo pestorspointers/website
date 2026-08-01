@@ -1,228 +1,182 @@
 'use client';
 
-import { useSession } from 'next-auth/react';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-
-const API = process.env.NEXT_PUBLIC_API_URL;
-
-function slugify(text) {
-  return text
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-');
-}
+import api from '@/lib/api';
 
 export default function AdminCoursesPage() {
-  const { data: session } = useSession();
-  const token = session?.user?.accessToken;
-
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ title: '', description: '', price: '', thumbnailUrl: '', slug: '' });
-  const [submitting, setSubmitting] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
-
-  const fetchCourses = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    const res = await fetch(`${API}/api/v1/courses/admin/all`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const data = await res.json();
-    setCourses(Array.isArray(data) ? data : []);
-    setLoading(false);
-  }, [token]);
+  const [form, setForm] = useState({ title: '', description: '', price: '' });
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetchCourses();
-  }, [fetchCourses]);
+    api
+      .get('/api/v1/courses/admin/all')
+      .then(({ data }) => setCourses(data))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
 
-  async function handleCreate(e) {
+  const create = async (e) => {
     e.preventDefault();
-    if (!token) return;
     setError('');
-    setSubmitting(true);
+    setSaving(true);
+
     try {
-      const res = await fetch(`${API}/api/v1/courses`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          title: form.title,
-          description: form.description,
-          price: parseFloat(form.price),
-          thumbnailUrl: form.thumbnailUrl || undefined,
-          slug: form.slug || undefined,
-        }),
+      const { data } = await api.post('/api/v1/courses', {
+        title: form.title,
+        description: form.description,
+        price: Number(form.price) || 0,
       });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Failed to create course'); return; }
-      setForm({ title: '', description: '', price: '', thumbnailUrl: '', slug: '' });
-      setShowForm(false);
-      await fetchCourses();
-    } catch {
-      setError('Failed to create course');
+      setCourses((prev) => [{ ...data, videoCount: 0 }, ...prev]);
+      setForm({ title: '', description: '', price: '' });
+      setCreating(false);
+    } catch (err) {
+      setError(err.message);
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
-  }
+  };
 
-  async function togglePublish(course) {
-    if (!token) return;
-    await fetch(`${API}/api/v1/courses/${course._id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ isPublished: !course.isPublished }),
-    });
-    await fetchCourses();
-  }
-
-  async function deleteCourse(id) {
-    if (!token || !confirm('Delete this course? This cannot be undone.')) return;
-    await fetch(`${API}/api/v1/courses/${id}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    await fetchCourses();
-  }
+  const togglePublished = async (course) => {
+    try {
+      const { data } = await api.patch(`/api/v1/courses/${course.id}`, {
+        isPublished: !course.isPublished,
+      });
+      setCourses((prev) =>
+        prev.map((c) => (c.id === course.id ? { ...c, isPublished: data.isPublished } : c))
+      );
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Courses</h1>
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold mb-1">Courses</h1>
+          <p className="text-gray-500">
+            A course is what people buy. Attach videos to it and only buyers can watch them.
+          </p>
+        </div>
         <button
-          onClick={() => { setShowForm(!showForm); setError(''); }}
-          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm"
+          type="button"
+          onClick={() => setCreating(!creating)}
+          className="shrink-0 px-4 py-2 bg-[#f53100] text-white text-sm font-semibold rounded hover:bg-[#d42a00]"
         >
-          {showForm ? 'Cancel' : '+ New Course'}
+          {creating ? 'Cancel' : 'New course'}
         </button>
       </div>
 
-      {showForm && (
-        <form onSubmit={handleCreate} className="bg-white border rounded-lg p-6 mb-6 space-y-4">
-          <h2 className="text-lg font-semibold">Create Course</h2>
-          {error && <p className="text-red-600 text-sm">{error}</p>}
+      {error && (
+        <p className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200">
+          {error}
+        </p>
+      )}
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="block text-sm font-medium mb-1">Title</label>
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value, slug: slugify(e.target.value) })}
-                required
-              />
-            </div>
-
-            <div className="col-span-2">
-              <label className="block text-sm font-medium mb-1">
-                Slug <span className="text-gray-400 font-normal">(auto-generated, editable)</span>
-              </label>
-              <input
-                className="w-full border rounded px-3 py-2 text-sm font-mono"
-                value={form.slug}
-                onChange={(e) => setForm({ ...form, slug: e.target.value })}
-              />
-            </div>
-
-            <div className="col-span-2">
-              <label className="block text-sm font-medium mb-1">Description</label>
-              <textarea
-                className="w-full border rounded px-3 py-2 text-sm"
-                rows={3}
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Price ($)</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-full border rounded px-3 py-2 text-sm"
-                value={form.price}
-                onChange={(e) => setForm({ ...form, price: e.target.value })}
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">
-                Thumbnail URL <span className="text-gray-400 font-normal">(optional)</span>
-              </label>
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                value={form.thumbnailUrl}
-                onChange={(e) => setForm({ ...form, thumbnailUrl: e.target.value })}
-                placeholder="https://..."
-              />
-            </div>
+      {creating && (
+        <form onSubmit={create} className="bg-white border rounded-lg p-6 mb-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Course name</label>
+            <input
+              type="text"
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              className="w-full border rounded px-3 py-2 text-sm"
+              required
+            />
           </div>
-
+          <div>
+            <label className="block text-sm font-medium mb-1">Description</label>
+            <textarea
+              rows={3}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Price (USD)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.price}
+              onChange={(e) => setForm({ ...form, price: e.target.value })}
+              className="w-40 border rounded px-3 py-2 text-sm"
+              required
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              A matching product is created in Stripe automatically.
+            </p>
+          </div>
           <button
             type="submit"
-            disabled={submitting}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
+            disabled={saving}
+            className="px-4 py-2 bg-[#161E2A] text-white text-sm rounded hover:bg-black disabled:opacity-50"
           >
-            {submitting ? 'Creating…' : 'Create Course'}
+            {saving ? 'Creating…' : 'Create course'}
           </button>
         </form>
       )}
 
       {loading ? (
-        <p className="text-gray-500">Loading…</p>
+        <p className="text-gray-400">Loading…</p>
       ) : courses.length === 0 ? (
-        <p className="text-gray-500">No courses yet.</p>
+        <div className="bg-white border rounded-lg p-12 text-center text-gray-400">
+          No courses yet. Create your first one above.
+        </div>
       ) : (
         <div className="space-y-3">
-          {courses.map((c) => (
-            <div key={c._id} className="flex items-center justify-between bg-white border rounded-lg px-4 py-3">
-              <div className="flex items-center gap-4">
-                {c.thumbnailUrl && (
-                  <img src={c.thumbnailUrl} alt="" className="w-16 h-10 object-cover rounded" />
-                )}
-                <div>
-                  <p className="font-medium text-sm">{c.title}</p>
-                  <p className="text-xs text-gray-500">
-                    /{c.slug} · ${c.price} · {c.videoIds.length} video(s) ·{' '}
-                    {c.isPublished ? (
-                      <span className="text-green-600">Published</span>
-                    ) : (
-                      <span className="text-yellow-600">Draft</span>
-                    )}
-                  </p>
+          {courses.map((course) => (
+            <div
+              key={course.id}
+              className="bg-white border rounded-lg p-5 flex items-center gap-5"
+            >
+              {course.thumbnailUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={course.thumbnailUrl}
+                  alt=""
+                  className="w-24 h-16 object-cover rounded shrink-0"
+                />
+              ) : (
+                <div className="w-24 h-16 bg-gray-100 rounded shrink-0" />
+              )}
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="font-semibold truncate">{course.title}</h2>
+                  {!course.isPublished && (
+                    <span className="text-[10px] uppercase tracking-wide bg-gray-100 text-gray-500 px-2 py-0.5 rounded">
+                      Draft
+                    </span>
+                  )}
                 </div>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  ${Number(course.price).toFixed(2)} · {course.videoCount}{' '}
+                  {course.videoCount === 1 ? 'video' : 'videos'} · /courses/{course.slug}
+                </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => togglePublished(course)}
+                  className="text-xs px-3 py-1.5 border rounded hover:bg-gray-50"
+                >
+                  {course.isPublished ? 'Unpublish' : 'Publish'}
+                </button>
                 <Link
-                  href={`/admin/courses/${c._id}`}
-                  className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                  href={`/admin/courses/${course.id}`}
+                  className="text-xs px-3 py-1.5 bg-[#161E2A] text-white rounded hover:bg-black"
                 >
                   Edit
                 </Link>
-                <button
-                  onClick={() => togglePublish(c)}
-                  className={`text-xs px-3 py-1 rounded border ${
-                    c.isPublished
-                      ? 'border-yellow-400 text-yellow-600 hover:bg-yellow-50'
-                      : 'border-green-500 text-green-600 hover:bg-green-50'
-                  }`}
-                >
-                  {c.isPublished ? 'Unpublish' : 'Publish'}
-                </button>
-                <button
-                  onClick={() => deleteCourse(c._id)}
-                  className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50"
-                >
-                  Delete
-                </button>
               </div>
             </div>
           ))}

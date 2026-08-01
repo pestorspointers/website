@@ -1,306 +1,389 @@
 'use client';
 
-import { useSession } from 'next-auth/react';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import api from '@/lib/api';
+import ImageField from '@/components/admin/ImageField';
 
-const API = process.env.NEXT_PUBLIC_API_URL;
-
+/**
+ * Course editor. The "Videos in this course" list is the important part: the
+ * order here is the order members watch in, and a video only unlocks for
+ * someone who owns *this* course.
+ */
 export default function AdminCourseEditPage() {
   const { id } = useParams();
   const router = useRouter();
-  const { data: session } = useSession();
-  const token = session?.user?.accessToken;
 
   const [course, setCourse] = useState(null);
-  const [allVideos, setAllVideos] = useState([]);
+  const [videos, setVideos] = useState([]);
+  const [available, setAvailable] = useState([]);
   const [tiers, setTiers] = useState([]);
+  const [tierIds, setTierIds] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState('');
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
-  // Edit form mirrors course fields
-  const [form, setForm] = useState({ title: '', description: '', price: '', thumbnailUrl: '', slug: '' });
-  // Selected video IDs (ordered list)
-  const [selectedVideoIds, setSelectedVideoIds] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
 
-  const load = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
+    (async () => {
+      try {
+        const [{ data: courseData }, { data: videoData }, { data: tierData }] = await Promise.all([
+          api.get(`/api/v1/courses/admin/${id}`),
+          api.get('/api/v1/videos/admin/all'),
+          api.get('/api/v1/admin/subscription-tiers'),
+        ]);
 
-    const [courseRes, videosRes, tiersRes] = await Promise.all([
-      fetch(`${API}/api/v1/courses/admin/all`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${API}/api/v1/videos`, { headers: { Authorization: `Bearer ${token}` } }),
-      fetch(`${API}/api/v1/admin/subscription-tiers`, { headers: { Authorization: `Bearer ${token}` } }),
-    ]);
+        if (cancelled) return;
 
-    const coursesData = await courseRes.json();
-    const found = coursesData.find((c) => c._id === id) ?? null;
-    setCourse(found);
-    if (found) {
-      setForm({
-        title: found.title,
-        description: found.description,
-        price: String(found.price),
-        thumbnailUrl: found.thumbnailUrl ?? '',
-        slug: found.slug,
-      });
-      setSelectedVideoIds(found.videoIds.map((v) => v._id));
-    }
-
-    const videosData = await videosRes.json();
-    setAllVideos(videosData);
-
-    const tiersData = await tiersRes.json();
-    setTiers(tiersData);
-
-    setLoading(false);
-  }, [token, id]);
-
-  useEffect(() => { load(); }, [load]);
-
-  async function handleSave(e) {
-    e.preventDefault();
-    if (!token || !course) return;
-    setError('');
-    setSuccess('');
-    setSaving(true);
-
-    try {
-      const res = await fetch(`${API}/api/v1/courses/${course._id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          title: form.title,
-          description: form.description,
-          price: parseFloat(form.price),
-          thumbnailUrl: form.thumbnailUrl || undefined,
-          slug: form.slug,
-        }),
-      });
-      if (!res.ok) {
-        const d = await res.json();
-        setError(d.error || 'Save failed');
-        return;
+        setCourse(courseData);
+        setVideos(courseData.videos ?? []);
+        setTierIds(courseData.tierIds ?? []);
+        setTiers(tierData);
+        // Anything not already in a course is fair game to add to this one.
+        setAvailable(videoData.filter((v) => !v.courseId));
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setSuccess('Course saved.');
-    } finally {
-      setSaving(false);
-    }
-  }
+    })();
 
-  async function handleSaveVideos() {
-    if (!token || !course) return;
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const flash = (message) => {
+    setStatus(message);
+    setTimeout(() => setStatus(''), 2500);
+  };
+
+  const saveDetails = async () => {
     setError('');
-    const res = await fetch(`${API}/api/v1/courses/${course._id}/videos`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ videoIds: selectedVideoIds }),
-    });
-    if (res.ok) setSuccess('Video list saved.');
-    else { const d = await res.json(); setError(d.error || 'Failed to save videos'); }
-  }
+    try {
+      const { data } = await api.patch(`/api/v1/courses/${id}`, {
+        title: course.title,
+        slug: course.slug,
+        description: course.description,
+        shortDescription: course.shortDescription,
+        thumbnailUrl: course.thumbnailUrl,
+        price: Number(course.price) || 0,
+        isPublished: course.isPublished,
+      });
+      setCourse((prev) => ({ ...prev, ...data }));
+      flash('Course saved');
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
-  function toggleVideo(videoId) {
-    setSelectedVideoIds((prev) =>
-      prev.includes(videoId) ? prev.filter((id) => id !== videoId) : [...prev, videoId]
-    );
-  }
+  const saveVideoOrder = async (next) => {
+    setVideos(next);
+    try {
+      await api.put(`/api/v1/courses/${id}/videos`, { videoIds: next.map((v) => v.id) });
+      flash('Video list saved');
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
-  function moveVideo(index, direction) {
-    const next = [...selectedVideoIds];
+  const addVideo = (videoId) => {
+    const video = available.find((v) => v.id === videoId);
+    if (!video) return;
+    setAvailable((prev) => prev.filter((v) => v.id !== videoId));
+    saveVideoOrder([...videos, video]);
+  };
+
+  const removeVideo = (video) => {
+    setAvailable((prev) => [video, ...prev]);
+    saveVideoOrder(videos.filter((v) => v.id !== video.id));
+  };
+
+  const move = (index, direction) => {
     const target = index + direction;
-    if (target < 0 || target >= next.length) return;
+    if (target < 0 || target >= videos.length) return;
+    const next = [...videos];
     [next[index], next[target]] = [next[target], next[index]];
-    setSelectedVideoIds(next);
-  }
+    saveVideoOrder(next);
+  };
 
-  async function handleTierToggle(tier) {
-    if (!token) return;
-    const alreadyAssigned = tier.unlockedCourseIds.includes(course._id);
-    const newIds = alreadyAssigned
-      ? tier.unlockedCourseIds.filter((cid) => cid !== course._id)
-      : [...tier.unlockedCourseIds, course._id];
+  const toggleTier = async (tierId) => {
+    const next = tierIds.includes(tierId)
+      ? tierIds.filter((t) => t !== tierId)
+      : [...tierIds, tierId];
 
-    await fetch(`${API}/api/v1/admin/subscription-tiers/${tier._id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ unlockedCourseIds: newIds }),
-    });
-    await load();
-    setSuccess('Tier assignment updated.');
-  }
+    setTierIds(next);
+    try {
+      await api.put(`/api/v1/courses/${id}/tiers`, { tierIds: next });
+      flash('Membership access saved');
+    } catch (err) {
+      setError(err.message);
+      setTierIds(tierIds);
+    }
+  };
 
-  if (loading) return <p className="text-gray-500">Loading…</p>;
-  if (!course) return <p className="text-red-600">Course not found.</p>;
+  const deleteCourse = async () => {
+    if (!confirm(`Delete "${course.title}"? Its videos stay in your library.`)) return;
+    try {
+      await api.delete(`/api/v1/courses/${id}`);
+      router.push('/admin/courses');
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
-  const assignedVideoObjects = selectedVideoIds
-    .map((vid) => allVideos.find((v) => v._id === vid))
-    .filter(Boolean);
+  if (loading) return <p className="text-gray-400">Loading…</p>;
+  if (!course) return <p className="text-red-600">{error || 'Course not found.'}</p>;
 
   return (
-    <div className="max-w-3xl space-y-8">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Edit Course</h1>
-        <button onClick={() => router.push('/admin/courses')} className="text-sm text-gray-500 hover:text-gray-700">
-          ← Back to courses
-        </button>
-      </div>
-
-      {error && <p className="text-red-600 text-sm bg-red-50 p-3 rounded">{error}</p>}
-      {success && <p className="text-green-600 text-sm bg-green-50 p-3 rounded">{success}</p>}
-
-      {/* ── Metadata ─────────────────────────────────────────────── */}
-      <section className="bg-white border rounded-lg p-6 space-y-4">
-        <h2 className="font-semibold">Details</h2>
-        <form onSubmit={handleSave} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">Title</label>
-            <input
-              className="w-full border rounded px-3 py-2 text-sm"
-              value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Slug</label>
-            <input
-              className="w-full border rounded px-3 py-2 text-sm font-mono"
-              value={form.slug}
-              onChange={(e) => setForm({ ...form, slug: e.target.value })}
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">Description</label>
-            <textarea
-              className="w-full border rounded px-3 py-2 text-sm"
-              rows={3}
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              required
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Price ($)</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                className="w-full border rounded px-3 py-2 text-sm"
-                value={form.price}
-                onChange={(e) => setForm({ ...form, price: e.target.value })}
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Thumbnail URL</label>
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                value={form.thumbnailUrl}
-                onChange={(e) => setForm({ ...form, thumbnailUrl: e.target.value })}
-                placeholder="https://..."
-              />
-            </div>
-          </div>
-          <button
-            type="submit"
-            disabled={saving}
-            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
-          >
-            {saving ? 'Saving…' : 'Save Details'}
-          </button>
-        </form>
-      </section>
-
-      {/* ── Video assignment ─────────────────────────────────────── */}
-      <section className="bg-white border rounded-lg p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold">Videos ({selectedVideoIds.length} selected)</h2>
-          <button
-            onClick={handleSaveVideos}
-            className="bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 text-sm"
-          >
-            Save Video Order
-          </button>
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <div>
+          <Link href="/admin/courses" className="text-sm text-gray-500 hover:underline">
+            ← All courses
+          </Link>
+          <h1 className="text-2xl font-bold mt-1">{course.title}</h1>
         </div>
-
-        {/* Selected videos — ordered */}
-        {assignedVideoObjects.length > 0 && (
-          <div className="space-y-1 mb-3">
-            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Course order</p>
-            {assignedVideoObjects.map((v, i) => (
-              <div key={v._id} className="flex items-center gap-2 bg-blue-50 rounded px-3 py-2 text-sm">
-                <span className="text-gray-400 w-5 text-right">{i + 1}.</span>
-                <span className="flex-1">{v.title}</span>
-                <button onClick={() => moveVideo(i, -1)} disabled={i === 0} className="text-gray-400 hover:text-gray-700 disabled:opacity-30">↑</button>
-                <button onClick={() => moveVideo(i, 1)} disabled={i === assignedVideoObjects.length - 1} className="text-gray-400 hover:text-gray-700 disabled:opacity-30">↓</button>
-                <button onClick={() => toggleVideo(v._id)} className="text-red-400 hover:text-red-600 ml-1">✕</button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* All videos — add/remove */}
-        <div className="space-y-1">
-          <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">All videos</p>
-          {allVideos.length === 0 ? (
-            <p className="text-sm text-gray-400">No videos uploaded yet.</p>
-          ) : (
-            allVideos.map((v) => {
-              const selected = selectedVideoIds.includes(v._id);
-              return (
-                <label key={v._id} className="flex items-center gap-3 px-3 py-2 rounded hover:bg-gray-50 cursor-pointer text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => toggleVideo(v._id)}
-                    className="rounded"
-                  />
-                  <span className={selected ? 'font-medium' : ''}>{v.title}</span>
-                  <span className="text-xs text-gray-400 ml-auto">{v.accessType}</span>
-                </label>
-              );
-            })
+        <div className="flex items-center gap-2">
+          {status && <span className="text-sm text-green-600">{status}</span>}
+          {course.isPublished && (
+            <a
+              href={`/courses/${course.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm px-3 py-2 border rounded hover:bg-gray-100"
+            >
+              View page ↗
+            </a>
           )}
         </div>
-      </section>
+      </div>
 
-      {/* ── Subscription tier assignment ─────────────────────────── */}
-      <section className="bg-white border rounded-lg p-6 space-y-3">
-        <h2 className="font-semibold">Subscription Tier Access</h2>
-        <p className="text-sm text-gray-500">Toggle which tiers unlock this course for subscribers.</p>
-        {tiers.length === 0 ? (
-          <p className="text-sm text-gray-400">No subscription tiers created yet.</p>
-        ) : (
-          tiers.map((tier) => {
-            const assigned = tier.unlockedCourseIds.includes(course._id);
-            return (
-              <div key={tier._id} className="flex items-center justify-between border rounded px-4 py-3">
-                <div>
-                  <p className="font-medium text-sm">{tier.name}</p>
-                  <p className="text-xs text-gray-400">
-                    {tier.unlockedCourseIds.length} course(s) unlocked
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleTierToggle(tier)}
-                  className={`text-xs px-3 py-1.5 rounded border transition-colors ${
-                    assigned
-                      ? 'border-red-300 text-red-600 hover:bg-red-50'
-                      : 'border-green-500 text-green-600 hover:bg-green-50'
-                  }`}
+      {error && (
+        <p className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200">
+          {error}
+        </p>
+      )}
+
+      <div className="grid lg:grid-cols-2 gap-6 items-start">
+        {/* ── Details ── */}
+        <section className="bg-white border rounded-lg p-6 space-y-4">
+          <h2 className="font-bold text-lg">Course details</h2>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Name</label>
+            <input
+              type="text"
+              value={course.title ?? ''}
+              onChange={(e) => setCourse({ ...course, title: e.target.value })}
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Web address</label>
+            <div className="flex items-center gap-1">
+              <span className="text-sm text-gray-400">/courses/</span>
+              <input
+                type="text"
+                value={course.slug ?? ''}
+                onChange={(e) => setCourse({ ...course, slug: e.target.value })}
+                className="flex-1 border rounded px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Short summary (card text)</label>
+            <input
+              type="text"
+              value={course.shortDescription ?? ''}
+              onChange={(e) => setCourse({ ...course, shortDescription: e.target.value })}
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Full description</label>
+            <textarea
+              rows={5}
+              value={course.description ?? ''}
+              onChange={(e) => setCourse({ ...course, description: e.target.value })}
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+          </div>
+
+          <ImageField
+            label="Cover image"
+            value={course.thumbnailUrl}
+            onChange={(v) => setCourse({ ...course, thumbnailUrl: v })}
+          />
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Price (USD)</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={course.price ?? 0}
+              onChange={(e) => setCourse({ ...course, price: e.target.value })}
+              className="w-40 border rounded px-3 py-2 text-sm"
+            />
+          </div>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={Boolean(course.isPublished)}
+              onChange={(e) => setCourse({ ...course, isPublished: e.target.checked })}
+              className="w-4 h-4"
+            />
+            Published — visible on the website
+          </label>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={saveDetails}
+              className="px-4 py-2 bg-[#f53100] text-white text-sm font-semibold rounded hover:bg-[#d42a00]"
+            >
+              Save details
+            </button>
+            <button
+              type="button"
+              onClick={deleteCourse}
+              className="px-4 py-2 border text-red-600 text-sm rounded hover:bg-red-50 ml-auto"
+            >
+              Delete course
+            </button>
+          </div>
+        </section>
+
+        <div className="space-y-6">
+          {/* ── Videos ── */}
+          <section className="bg-white border rounded-lg p-6">
+            <h2 className="font-bold text-lg mb-1">Videos in this course</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Buying this course unlocks exactly these videos, in this order.
+            </p>
+
+            <div className="space-y-2 mb-4">
+              {videos.map((video, index) => (
+                <div
+                  key={video.id}
+                  className="flex items-center gap-3 border rounded p-3 bg-gray-50"
                 >
-                  {assigned ? 'Remove from tier' : 'Add to tier'}
-                </button>
+                  <span className="text-xs text-gray-400 w-5 shrink-0">{index + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{video.title}</p>
+                    <p className="text-xs text-gray-400">
+                      {video.isPublished ? 'Published' : 'Draft'} ·{' '}
+                      {video.transcodeStatus === 'ready' ? 'Ready to play' : video.transcodeStatus}
+                      {/* A public video inside a paid course plays for
+                          everyone — surfaced here so it's never a surprise. */}
+                      {video.accessType === 'public' && (
+                        <span className="text-amber-600"> · Free preview</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => move(index, -1)}
+                      disabled={index === 0}
+                      className="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
+                      aria-label="Move up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => move(index, 1)}
+                      disabled={index === videos.length - 1}
+                      className="px-2 py-1 text-xs border rounded bg-white disabled:opacity-30"
+                      aria-label="Move down"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeVideo(video)}
+                      className="px-2 py-1 text-xs border rounded bg-white text-red-600"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              {videos.length === 0 && (
+                <p className="text-sm text-gray-400 py-6 text-center border-2 border-dashed rounded">
+                  No videos yet.
+                </p>
+              )}
+            </div>
+
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                addVideo(e.target.value);
+                e.target.value = '';
+              }}
+              className="w-full border rounded px-3 py-2 text-sm"
+            >
+              <option value="">Add a video from your library…</option>
+              {available.map((video) => (
+                <option key={video.id} value={video.id}>
+                  {video.title}
+                </option>
+              ))}
+            </select>
+
+            <p className="text-xs text-gray-400 mt-2">
+              Only videos not already attached to another course appear here.{' '}
+              <Link href="/admin/videos" className="underline">
+                Upload a new one
+              </Link>
+              .
+            </p>
+          </section>
+
+          {/* ── Membership access ── */}
+          <section className="bg-white border rounded-lg p-6">
+            <h2 className="font-bold text-lg mb-1">Included with these memberships</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Subscribers on a ticked plan get this course without buying it separately.
+            </p>
+
+            {tiers.length === 0 ? (
+              <p className="text-sm text-gray-400">
+                No membership plans yet.{' '}
+                <Link href="/admin/subscriptions" className="underline">
+                  Create one
+                </Link>
+                .
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {tiers.map((tier) => (
+                  <label key={tier.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={tierIds.includes(tier.id)}
+                      onChange={() => toggleTier(tier.id)}
+                      className="w-4 h-4"
+                    />
+                    {tier.name}
+                    {!tier.isActive && <span className="text-xs text-gray-400">(inactive)</span>}
+                  </label>
+                ))}
               </div>
-            );
-          })
-        )}
-      </section>
+            )}
+          </section>
+        </div>
+      </div>
     </div>
   );
 }

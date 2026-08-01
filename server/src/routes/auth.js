@@ -1,74 +1,56 @@
 import { Router } from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
-import { authenticate } from '../middleware/authenticate.js';
+import { db, unwrap } from '../config/supabase.js';
+import { authenticate, invalidateProfile } from '../middleware/authenticate.js';
+import { camelize, pickSnake } from '../lib/case.js';
+import { getEntitlements } from '../services/access.js';
 
 const router = Router();
 
-router.post('/register', async (req, res) => {
-  const { email, password } = req.body;
+/**
+ * Sign-up / sign-in / password reset are handled by Supabase Auth directly
+ * from the browser. What the API owns is everything that hangs off the
+ * account: role, billing state, and what the user is entitled to watch.
+ */
 
-  if (!email || !password) {
-    res.status(400).json({ error: 'Email and password are required' });
-    return;
+router.use(authenticate);
+
+// Current user, with their full entitlement picture.
+router.get('/me', async (req, res) => {
+  const entitlements = await getEntitlements(req.user);
+
+  let tier = null;
+  if (req.user.subscriptionTierId) {
+    const row = unwrap(
+      await db()
+        .from('subscription_tiers')
+        .select('id, name, description, price_monthly, price_annual')
+        .eq('id', req.user.subscriptionTierId)
+        .maybeSingle(),
+      'load tier'
+    );
+    tier = row ? camelize(row) : null;
   }
 
-  if (password.length < 8) {
-    res.status(400).json({ error: 'Password must be at least 8 characters' });
-    return;
-  }
-
-  const existing = await User.findOne({ email });
-  if (existing) {
-    res.status(409).json({ error: 'Email already in use' });
-    return;
-  }
-
-  const passwordHash = await bcrypt.hash(password, 12);
-  const user = await User.create({ email, passwordHash });
-
-  const token = signToken(user._id.toString(), user.email, user.role);
-  res.status(201).json({
-    token,
-    user: { id: user._id, email: user.email, role: user.role },
-  });
+  res.json({ user: { ...req.user, tier }, entitlements });
 });
 
-router.post('/login', async (req, res) => {
-  const { email, password } = req.body;
+// Let a user edit their own display name. Role and billing columns are not in
+// the allowlist, so they can't be escalated through this endpoint.
+router.patch('/me', async (req, res) => {
+  const updates = pickSnake(req.body, ['fullName']);
 
-  if (!email || !password) {
-    res.status(400).json({ error: 'Email and password are required' });
-    return;
-  }
+  const updated = unwrap(
+    await db()
+      .from('profiles')
+      .update(updates)
+      .eq('id', req.user.id)
+      .select('id, email, full_name, role')
+      .single(),
+    'update profile'
+  );
 
-  const user = await User.findOne({ email });
-  if (!user || !(await user.comparePassword(password))) {
-    res.status(401).json({ error: 'Invalid credentials' });
-    return;
-  }
-
-  const token = signToken(user._id.toString(), user.email, user.role);
-  res.json({
-    token,
-    user: { id: user._id, email: user.email, role: user.role },
-  });
+  invalidateProfile(req.user.id);
+  res.json(camelize(updated));
 });
-
-router.get('/me', authenticate, async (req, res) => {
-  const user = await User.findById(req.user.id).select('-passwordHash');
-  if (!user) {
-    res.status(404).json({ error: 'User not found' });
-    return;
-  }
-  res.json(user);
-});
-
-function signToken(id, email, role) {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error('JWT_SECRET is not defined');
-  return jwt.sign({ id, email, role }, secret, { expiresIn: '7d' });
-}
 
 export default router;

@@ -1,531 +1,239 @@
-# Life Coach Platform — Full Build Plan
+# Pestor's Pointers — course platform
 
-## Current Status
+A course-selling website with a built-in admin area, so the site owner can change
+the pages, add courses and upload videos without touching code.
 
-**Currently on: Phase 6 — Public Site**
-
-| Phase | Description | Status |
-|---|---|---|
-| Phase 1 | Foundation (Next.js + Express + Auth + MongoDB) | ✅ Complete |
-| Phase 2 | Subscriptions & Payments (Stripe) | ✅ Complete |
-| Phase 3 | Video Pipeline (S3 + CloudFront + MediaConvert) | ✅ Complete |
-| Phase 4 | Courses (CRUD + purchase flow) | ✅ Complete |
-| Phase 5 | Blog (MDX editor + rendering) | ✅ Complete |
-| **Phase 6** | **Public Site (homepage + SEO + nav)** | **⬅ In Progress** |
+- **Frontend** — Next.js 14 (App Router), Tailwind
+- **API** — Express, talking to Supabase with the service-role key
+- **Database + auth + image storage** — Supabase (Postgres, Auth, Storage)
+- **Payments** — Stripe (memberships + one-off course purchases)
+- **Course video** — private S3 bucket → MediaConvert (HLS) → CloudFront signed URLs
 
 ---
 
-## Project Overview
+## How access works
 
-A full-stack MERN platform for a life coach to sell:
-- Subscription tiers (recurring, unlocks specific courses)
-- Individual video purchases (one-time)
-- Course bundles (one-time)
+Three things can unlock a video, and nothing else can:
 
-Also includes a blog, public marketing pages, and a fully-featured admin panel.
-
----
-
-## Tech Stack (Final — Do Not Change)
-
-| Layer | Technology | Notes |
-|---|---|---|
-| Frontend | Next.js 14 (App Router) | Replaces CRA — needed for SEO/SSR |
-| Backend API | Express.js + Node.js | Separate from Next.js, hosts all business logic |
-| Database | MongoDB Atlas (Mongoose) | |
-| Auth | NextAuth.js (web) + JWT shared with Express | Mobile-compatible |
-| Payments | Stripe | Subscriptions + one-time purchases, greenfield account |
-| Public videos | YouTube embeds (recommended) | Testimonials/trailers — saves S3 cost |
-| Protected video storage | AWS S3 (private bucket) | Never expose directly |
-| Protected video delivery | AWS CloudFront + signed URLs | OAC, time-limited URLs |
-| Video transcoding | AWS MediaConvert | Upload → HLS (adaptive bitrate) |
-| Video player | Video.js + HLS.js plugin | Supports HLS streams |
-| Blog editor | Monaco Editor (MDX) | Admin writes raw MDX |
-| Blog rendering | next-mdx-remote + Shiki | Server-side MDX with syntax highlighting |
-| Frontend hosting | AWS Amplify | Do NOT use Vercel (user rejected — cost) |
-| Backend hosting | Railway | Simple Node.js hosting |
-| Email | Resend | Transactional emails, free tier 3k/month |
-
----
-
-## Repository Structure
-
-```
-/Users/ppadmin/JD/website/         ← monorepo root
-├── client/                         ← Next.js 14 app
-│   ├── app/
-│   │   ├── (auth)/                 ← login, register (no nav)
-│   │   ├── (protected)/            ← dashboard, billing, video player
-│   │   ├── admin/                  ← admin panel (role=admin only)
-│   │   ├── api/auth/[...nextauth]/ ← NextAuth handler
-│   │   ├── blog/                   ← public blog pages
-│   │   ├── courses/                ← public course catalog
-│   │   └── page.tsx                ← homepage
-│   ├── components/
-│   ├── lib/
-│   │   ├── auth.ts                 ← NextAuth config
-│   │   └── api.ts                  ← axios instance
-│   ├── middleware.ts                ← route protection
-│   └── types/next-auth.d.ts
-│
-├── server/                         ← Express API
-│   └── src/
-│       ├── config/db.ts
-│       ├── middleware/
-│       │   ├── authenticate.ts     ← JWT verification
-│       │   └── requireAdmin.ts     ← role guard
-│       ├── models/                 ← all Mongoose models
-│       ├── routes/                 ← all API routes
-│       └── services/
-│           └── stripe.ts           ← Stripe singleton
-│
-└── PLAN.md                         ← this file
-```
-
----
-
-## Environment Variables
-
-### `server/.env`
-```
-PORT=5001
-MONGODB_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/lifecoach
-JWT_SECRET=<random 32+ chars>
-CLIENT_URL=http://localhost:3000
-STRIPE_SECRET_KEY=sk_test_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=us-east-1
-S3_BUCKET_NAME=lifecoach-videos
-CLOUDFRONT_DOMAIN=https://xxxx.cloudfront.net
-CLOUDFRONT_KEY_PAIR_ID=...
-CLOUDFRONT_PRIVATE_KEY=<RSA private key for signed URLs, base64 encoded>
-MEDIACONVERT_ENDPOINT=https://xxxx.mediaconvert.us-east-1.amazonaws.com
-MEDIACONVERT_ROLE_ARN=arn:aws:iam::...
-```
-
-### `client/.env.local`
-```
-NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=<random 32+ chars, different from JWT_SECRET>
-API_URL=http://localhost:5001
-NEXT_PUBLIC_API_URL=http://localhost:5001
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
-```
-
----
-
-## Business Model & Access Control
-
-### User Roles
-- `user` — default, can browse + purchase
-- `admin` — full access to admin panel, hidden from all public routes
-
-### Subscription Tiers
-- Stored in `subscriptionTiers` MongoDB collection (NOT hardcoded)
-- Admin can create/edit/delete tiers via admin portal
-- Each tier has `unlockedCourseIds: [ObjectId]` — admin assigns which courses a tier unlocks
-- 2 tiers at launch, but the system supports any number
-- Each tier syncs to a Stripe Product with monthly + optional annual Price
-
-### Video Access Types (3 types — `accessType` field on Video model)
-| Type | Who can watch |
+| Video type | Who can watch it |
 |---|---|
-| `public` | Anyone, no login needed. Use YouTube embeds for these. |
-| `course` | Active subscriber whose tier includes this video's courseId, OR user who purchased the course bundle |
-| `purchase` | Only users who individually purchased this video. Even subscribers must purchase separately. |
+| `public` | Anyone, logged in or not. Use for trailers and free clips. |
+| `course` | Anyone who bought that course, **or** a paying member on a plan that includes it. |
+| `purchase` | Only someone who bought that specific video. |
 
-### Access Control Logic
-```
-canUserWatchVideo(user, video):
-  if video.accessType === 'public'    → ALLOW
+A course purchase unlocks **exactly the videos attached to that course** — nothing
+else. That scoping comes from `videos.course_id`, and a video can only belong to
+one course at a time.
 
-  if video.accessType === 'purchase'
-    → ALLOW if video._id in user.purchasedVideoIds, else DENY
+The rule lives in two places that must agree:
 
-  if video.accessType === 'course'
-    → ALLOW if user.purchasedCourseIds includes video.courseId
-    → ALLOW if user.subscription.status === 'active'
-         AND tier.unlockedCourseIds includes video.courseId
-    → DENY otherwise
-```
+- `server/src/services/access.js` — what the API enforces
+- `public.can_access_course()` / `public.can_access_video()` in the migration — what
+  Row Level Security enforces
 
----
-
-## Database Schemas
-
-### `users`
-```
-email: String (unique, lowercase)
-passwordHash: String
-role: 'user' | 'admin'
-stripeCustomerId: String
-subscription: {
-  status: 'active' | 'past_due' | 'canceled' | 'none'
-  tierId: ObjectId → SubscriptionTier
-  stripeSubscriptionId: String
-  currentPeriodEnd: Date
-}
-purchasedVideoIds: [ObjectId → Video]
-purchasedCourseIds: [ObjectId → Course]
-timestamps: true
-```
-
-### `subscriptionTiers`
-```
-name: String
-description: String
-stripeProductId: String
-stripePriceIds: { monthly: String, annual: String }
-unlockedCourseIds: [ObjectId → Course]
-isActive: Boolean (default true)
-displayOrder: Number (default 0)
-timestamps: true
-```
-Admin assigns courses to tiers. Deactivating archives the Stripe product.
-
-### `courses`
-```
-slug: String (unique)
-title: String
-description: String
-thumbnailUrl: String
-videoIds: [ObjectId → Video]
-price: Number (for one-time bundle purchase)
-stripeProductId: String
-isPublished: Boolean (default false)
-timestamps: true
-```
-When admin creates a course, a Stripe Product is auto-created. When course is added to a subscription tier, update `tier.unlockedCourseIds`.
-
-### `videos`
-```
-title: String
-description: String
-s3Key: String (e.g. "videos/hls/abc123/index.m3u8")
-cloudFrontUrl: String (base URL — signed URLs generated per-request)
-duration: Number (seconds)
-thumbnailUrl: String
-accessType: 'public' | 'course' | 'purchase'
-courseId: ObjectId → Course (for course videos)
-price: Number (for purchase videos)
-stripeProductId: String (for purchase videos)
-isPublished: Boolean (default false)
-timestamps: true
-```
-
-### `blogPosts`
-```
-slug: String (unique)
-title: String
-mdxContent: String (raw MDX)
-excerpt: String
-author: String
-tags: [String]
-coverImageUrl: String
-isPublished: Boolean (default false)
-publishedAt: Date
-timestamps: true
-```
-
-### `purchases`
-```
-userId: ObjectId → User
-type: 'subscription' | 'video' | 'course'
-itemId: ObjectId (video or course)
-stripePaymentIntentId: String
-stripeSubscriptionId: String
-amount: Number (in cents)
-timestamps: true
-```
+A playable video URL is only ever produced by `GET /api/v1/videos/:id/stream`,
+which runs the access check and then returns a CloudFront URL signed for two
+hours. There is no other route to the video files: the S3 bucket is private and
+CloudFront requires the signature.
 
 ---
 
-## API Routes
+## First-time setup
 
-### Auth — `/api/v1/auth`
-```
-POST /register         → create account, returns JWT
-POST /login            → verify credentials, returns JWT
-GET  /me               → get current user (auth required)
-```
+### 1. Supabase
 
-### Admin Users — `/api/v1/admin` (auth + admin required)
-```
-GET    /users          → list all users
-PATCH  /users/:id/role → update user role
-```
+1. Create a project at [supabase.com](https://supabase.com).
+2. Open the **SQL Editor** and run, in order:
+   - `supabase/migrations/0001_init.sql` — tables, functions, RLS, storage bucket
+   - `supabase/seed.sql` — starter pages, navigation, footer
+3. In **Authentication → Providers**, make sure Email is enabled. Decide whether
+   you want "Confirm email" on (recommended for a live site) — the sign-up page
+   handles both.
+4. In **Authentication → URL Configuration**, add your site URL and
+   `http://localhost:3000/auth/callback` to the redirect allow-list.
+5. Grab your keys from **Project Settings → API**.
 
-### Subscription Tiers — `/api/v1/admin/subscription-tiers` (auth + admin required)
-```
-GET    /               → list all tiers (including inactive)
-POST   /               → create tier + sync to Stripe
-PATCH  /:id            → update tier + sync to Stripe
-DELETE /:id            → soft delete (deactivate on Stripe)
-```
+**Make yourself an admin.** Before signing up, run this with your own email:
 
-### Payments — `/api/v1/payments`
-```
-GET  /tiers                      → PUBLIC: list active tiers
-POST /create-checkout-session    → create Stripe Checkout (subscription)
-POST /create-portal-session      → create Stripe Customer Portal session
-GET  /subscription               → get current user's subscription status
+```sql
+update public.site_settings
+   set value = '["you@example.com"]'::jsonb
+ where key = 'admin_emails';
 ```
 
-### Webhooks — `/api/v1/webhooks` (raw body — must be before express.json)
-```
-POST /stripe  → handles:
-  checkout.session.completed         → grant subscription access
-  customer.subscription.created      → sync tier + status
-  customer.subscription.updated      → sync tier + status + period end
-  customer.subscription.deleted      → revoke, clear tier
-  invoice.payment_failed             → set past_due
-  invoice.payment_succeeded          → set active
-  checkout.session.completed (mode=payment) → grant video/course access [Phase 3/4]
+Anyone who signs up with a listed email becomes an admin automatically. After
+that you can promote other people from **Admin → Members**. Already signed up?
+Just set it directly:
+
+```sql
+update public.profiles set role = 'admin' where email = 'you@example.com';
 ```
 
-### Videos — `/api/v1/videos` [Phase 3]
-```
-GET    /                    → PUBLIC: list published public videos
-GET    /:id/stream          → PROTECTED: return signed CloudFront URL (checks access)
-POST   /upload-url          → ADMIN: get S3 presigned PUT URL for upload
-POST   /                    → ADMIN: create video metadata after upload
-PATCH  /:id                 → ADMIN: update video
-DELETE /:id                 → ADMIN: delete video + S3 object
-```
+### 2. Environment files
 
-### Courses — `/api/v1/courses` [Phase 4]
-```
-GET    /                    → PUBLIC: list published courses
-GET    /:slug               → PUBLIC: course detail
-POST   /                    → ADMIN: create course + Stripe Product
-PATCH  /:id                 → ADMIN: update course
-DELETE /:id                 → ADMIN: delete course
-POST   /:id/videos          → ADMIN: add/reorder videos in course
-POST   /:id/checkout        → PROTECTED: create one-time purchase Checkout Session
+Copy the examples and fill them in:
+
+```bash
+cp server/.env.example server/.env
+cp client/.env.example client/.env.local
 ```
 
-### Blog — `/api/v1/blog` [Phase 5]
-```
-GET    /                    → PUBLIC: list published posts
-GET    /:slug               → PUBLIC: get post by slug
-POST   /                    → ADMIN: create post
-PATCH  /:id                 → ADMIN: update post
-DELETE /:id                 → ADMIN: delete post
-```
+The one to be careful with is `SUPABASE_SERVICE_ROLE_KEY` — it bypasses all
+security rules. It belongs in `server/.env` only, never in the client.
 
----
+### 3. Stripe
 
-## Build Phases
+1. Add `STRIPE_SECRET_KEY` to `server/.env`.
+2. Forward webhooks while developing, and copy the signing secret it prints into
+   `STRIPE_WEBHOOK_SECRET`:
+   ```bash
+   stripe listen --forward-to localhost:5001/api/v1/webhooks/stripe
+   ```
+3. Turn on the Customer Portal: **Stripe Dashboard → Settings → Billing →
+   Customer Portal**.
 
-### ✅ Phase 1 — Foundation (COMPLETE — session 1)
-- Next.js 14 + Express scaffolding
-- MongoDB Atlas connection + all 6 Mongoose models
-- NextAuth.js login/register with JWT
-- JWT passed to Express for API auth
-- Admin role middleware
-- Admin panel shell with sidebar nav
-- Protected routes via Next.js middleware
-- `/dashboard`, `/login`, `/register`, `/admin`
+Stripe products and prices are created automatically when you add a course or a
+membership plan in the admin — there is nothing to set up by hand.
 
-### ✅ Phase 2 — Subscriptions & Payments (COMPLETE — session 1)
-- `subscriptionTiers` CRUD in admin with Stripe Product/Price sync
-- Stripe Checkout sessions (subscription mode)
-- Stripe Customer Portal
-- Webhook handler (5 event types)
-- `/admin/subscriptions` — create/activate/deactivate tiers
-- `/billing` — user-facing subscribe page with monthly/annual toggle
-- Dashboard shows live subscription status
+### 4. AWS (only needed for course video)
 
-### ✅ Phase 3 — Video Pipeline (COMPLETE — session 2)
-**Server:**
-- `GET /api/v1/videos` — public video listing
-- `GET /api/v1/videos/:id/stream` — access-checked, returns signed CloudFront URL
-- `POST /api/v1/videos/upload-url` — admin gets S3 presigned PUT URL
-- `POST /api/v1/videos` — create video record after upload completes
-- `PATCH /api/v1/videos/:id` — update metadata
-- `DELETE /api/v1/videos/:id` — remove from DB + S3
-- AWS MediaConvert service: trigger transcoding job on upload completion
-- CloudFront signed URL service: generate time-limited signed URLs
+Everything else works without this; you just can't play uploaded videos until
+it's done.
 
-**Client:**
-- `/admin/videos` — list, upload, edit, publish videos
-  - Upload flow: get presigned URL → browser PUTs to S3 → poll for MediaConvert completion → save metadata
-  - Fields: title, description, accessType, courseId (optional), price (if purchase type), thumbnail
-- `components/VideoPlayer.tsx` — Video.js + HLS.js, fetches signed URL on mount
-- `/watch/[id]` — protected video player page (checks access before rendering player)
-
-**AWS Setup for Phase 3:**
-1. Create private S3 bucket (`lifecoach-videos`)
-2. Create CloudFront distribution with OAC pointing to S3
-3. Enable CloudFront key pair for signed URLs (in CloudFront → Key management)
-4. Set up MediaConvert: create IAM role with S3 read/write + MediaConvert permissions
-5. Get MediaConvert endpoint for your AWS region
-6. S3 folder structure:
-   - `uploads/raw/{videoId}/original.mp4` — raw upload
-   - `videos/hls/{videoId}/` — MediaConvert HLS output
-   - `thumbnails/{videoId}.jpg` — thumbnail
-
-**MediaConvert Job Template:**
-- Input: `s3://bucket/uploads/raw/{videoId}/original.mp4`
-- Output: HLS adaptive bitrate, multiple renditions (360p, 720p, 1080p)
-- Output path: `s3://bucket/videos/hls/{videoId}/`
-- Thumbnail: extract frame at 5s, save as JPG
-
-**CloudFront Signed URL Generation (server-side):**
-```typescript
-import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
-
-const signedUrl = getSignedUrl({
-  url: `${process.env.CLOUDFRONT_DOMAIN}/${video.s3Key}`,
-  keyPairId: process.env.CLOUDFRONT_KEY_PAIR_ID,
-  privateKey: Buffer.from(process.env.CLOUDFRONT_PRIVATE_KEY, 'base64').toString(),
-  dateLessThan: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2 hours
-});
-```
-
-### ✅ Phase 4 — Courses (COMPLETE — session 2)
-**Server:**
-- `GET /api/v1/courses` — public list of published courses
-- `GET /api/v1/courses/:slug` — course detail with video list (no stream URLs)
-- `POST /api/v1/courses` — admin create + auto-create Stripe Product
-- `PATCH /api/v1/courses/:id` — update metadata, reorder videos
-- `DELETE /api/v1/courses/:id` — remove course
-- `POST /api/v1/courses/:id/checkout` — one-time purchase Checkout Session
-- Webhook update: handle `checkout.session.completed` with `type=course` to add to `user.purchasedCourseIds`
-- Admin endpoint: `PATCH /api/v1/admin/subscription-tiers/:id` already accepts `unlockedCourseIds` — use this to assign courses to tiers
-
-**Client:**
-- `/admin/courses` — list courses, create/edit
-  - Create course: title, slug (auto-generated), description, thumbnail, price
-  - Assign videos (multi-select from existing video library)
-  - Assign to subscription tier (multi-select)
-- `/admin/courses/[id]` — edit course, reorder videos via drag-and-drop
-- `/courses` — public course catalog (SSG, revalidate every hour)
-- `/courses/[slug]` — course detail page: description, video list (locked/unlocked indicators), purchase button
-
-### ✅ Phase 5 — Blog (COMPLETE — session 2)
-**Server:**
-- `GET /api/v1/blog` — public published posts (paginated)
-- `GET /api/v1/blog/:slug` — single post
-- `POST /api/v1/blog` — admin create
-- `PATCH /api/v1/blog/:id` — admin update
-- `DELETE /api/v1/blog/:id` — admin delete
-
-**Client:**
-- `/admin/blog` — list posts with publish/unpublish toggle
-- `/admin/blog/new` — Monaco MDX editor with live preview panel side-by-side
-- `/admin/blog/[id]/edit` — same editor, pre-populated
-- `/blog` — public blog listing (SSG + ISR, revalidate: 3600)
-- `/blog/[slug]` — rendered MDX post (SSG + ISR)
-
-**MDX Setup:**
-- Package: `next-mdx-remote`
-- Syntax highlighting: `shiki`
-- Custom MDX components to register in `mdx-components.tsx`:
-  ```tsx
-  YouTube: ({ id }) => <iframe src={`https://youtube.com/embed/${id}`} ... />
-  CalloutBox: ({ type, children }) => <div className={`callout callout-${type}`}>...</div>
-  VideoEmbed: ({ videoId }) => <VideoPlayer videoId={videoId} />  // platform video
-  ```
-
-### ⬅ Phase 6 — Public Site (NEXT — final phase)
-**Pages to build:**
-- `/` — Homepage
-  - Hero section (headline, CTA buttons)
-  - Public video embeds (YouTube testimonials/trailers)
-  - Featured courses section (fetched from DB, published only)
-  - Featured blog posts (3 most recent)
-  - Subscription tier pricing cards
-- `/courses` — Course catalog grid
-- `/courses/[slug]` — Course detail + purchase flow
-- `/blog` — Blog listing with tags filter
-- `/blog/[slug]` — Individual blog post
-
-**Navigation:**
-- Public nav: Logo, Courses, Blog, Login, Sign Up
-- Authenticated nav: adds Dashboard link, removes Login/Sign Up
-- Admin nav: shown in admin sidebar only
-
-**SEO:**
-- Dynamic `generateMetadata()` on all public pages
-- OG image for blog posts (use cover image)
-- Sitemap: `/app/sitemap.ts` (Next.js built-in)
-- robots.txt: allow all except `/admin`, `/dashboard`, `/billing`
-
----
-
-## AWS Setup Checklist (Phase 3)
-
-### S3
-- [ ] Create bucket: `lifecoach-videos` (or similar)
-- [ ] Block ALL public access
-- [ ] Enable versioning (optional)
-- [ ] CORS config for browser direct upload:
+- **S3** — a private bucket, all public access blocked, with this CORS rule so the
+  browser can upload directly:
   ```json
   [{ "AllowedOrigins": ["http://localhost:3000", "https://yourdomain.com"],
      "AllowedMethods": ["PUT"], "AllowedHeaders": ["*"] }]
   ```
+- **CloudFront** — a distribution in front of that bucket using Origin Access
+  Control, with signed URLs enabled (Trusted Key Groups). Create a key pair,
+  then base64-encode the private key for `CLOUDFRONT_PRIVATE_KEY`:
+  ```bash
+  base64 -i private_key.pem | tr -d '\n'
+  ```
+- **MediaConvert** — an IAM role with read/write on the bucket, plus your
+  region's endpoint URL.
 
-### CloudFront
-- [ ] Create distribution → origin = S3 bucket
-- [ ] Create Origin Access Control (OAC) — attach to distribution
-- [ ] Update S3 bucket policy to allow CloudFront OAC only
-- [ ] Enable signed URLs/cookies: set Trusted Key Groups
-- [ ] Create CloudFront key pair → download private key → base64 encode for env var
+### 5. Run it
 
-### IAM
-- [ ] Create IAM user for server: permissions for S3 + CloudFront + MediaConvert
-- [ ] Create IAM role for MediaConvert: S3 read/write permissions
+```bash
+npm run install:all
+npm run dev
+```
 
-### MediaConvert
-- [ ] Get endpoint URL from AWS console (region-specific)
-- [ ] Create job template or use inline job spec in code
-
----
-
-## Stripe Setup Checklist
-
-- [ ] Add `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY` from test dashboard
-- [ ] Run `stripe listen --forward-to localhost:5001/api/v1/webhooks/stripe` for local dev
-- [ ] Copy `STRIPE_WEBHOOK_SECRET` from Stripe CLI output
-- [ ] Activate Customer Portal: Stripe Dashboard → Settings → Billing → Customer Portal
-- [ ] Subscription tier Products/Prices are auto-created by the admin portal (no manual Stripe setup needed for tiers)
-- [ ] Individual video/course Products/Prices auto-created when admin creates content (Phase 3/4)
+- Site — http://localhost:3000
+- Admin — http://localhost:3000/admin
+- API — http://localhost:5001
 
 ---
 
-## Deployment (Production)
+## Using the admin
 
-### Frontend — AWS Amplify
-1. Connect GitHub repo to Amplify
-2. Set build settings: root = `client/`, build command = `npm run build`, output = `.next`
-3. Add all `client/.env.local` vars as Amplify environment variables
-4. Update `NEXTAUTH_URL` to production domain
+Everything the site owner needs is at `/admin`.
 
-### Backend — Railway
-1. Create new Railway project → connect GitHub
-2. Set root directory to `server/`
-3. Add all `server/.env` vars as Railway environment variables
-4. Update `CLIENT_URL` to production Amplify domain
+**Pages** — pick a page, then add, reorder, hide or delete sections. Each section
+type (hero banner, cards, text, gallery, video, pricing, FAQ…) has its own simple
+form. Text edits save when you press **Save changes**; moving, hiding and
+deleting save immediately.
 
-### MongoDB
-- Upgrade Atlas cluster from M0 (free) to M10 ($57/month) for production
-- Whitelist Railway's static IP or use `0.0.0.0/0` with strong credentials
+Two sections fill themselves in: **Course list** and **Membership plans** show
+whatever is currently published, so the homepage stays current on its own.
+
+**Images** — upload once, reuse anywhere. Every image picker in the admin can
+choose from this library.
+
+**Site Settings** — logos, site name, the top navigation, the footer, and which
+email addresses get admin on sign-up.
+
+**Courses** — create a course, set its price, then attach videos and put them in
+order. The tick-boxes at the bottom control which membership plans include it.
+
+**Videos** — upload a file, choose whether it's free, part of a course, or sold
+on its own. Uploading is: create → upload to S3 → transcode. The badge flips from
+*Processing…* to *Ready to play* on its own; a video can only be published once
+it's ready.
+
+**Memberships** — recurring plans, and which courses each one unlocks. Changing a
+price creates a new price in Stripe; existing subscribers keep paying what they
+signed up for.
+
+**Members** — who has signed up, what they're paying, and a manual override to
+grant or revoke course access (useful for refunds and comps).
 
 ---
 
-## Key Decisions & Constraints
+## Project layout
 
-1. **No Vercel** — user rejected due to cost. Use AWS Amplify for Next.js hosting.
-2. **No CRA** — replaced with Next.js 14 for SSR/SEO.
-3. **Port 5001** for Express server (macOS AirPlay uses 5000).
-4. **Separate Express backend** — Next.js API routes are only used for NextAuth. All business logic is in Express so a future React Native mobile app can use the same API.
-5. **API versioned at `/api/v1/`** — future-proofing for mobile.
-6. **Auth flow**: NextAuth CredentialsProvider calls Express `/login` → Express returns JWT → NextAuth stores JWT in session → client passes JWT as `Authorization: Bearer` header to Express.
-7. **Webhook raw body**: The `/api/v1/webhooks` route is mounted BEFORE `express.json()` in `index.ts` to preserve raw body for Stripe signature verification. Do not change this order.
-8. **Admin first user**: Register normally, then manually set `role: "admin"` in MongoDB Atlas. After that, use `/admin/users` to promote others.
-9. **Public videos** use YouTube embeds (not S3) to save bandwidth costs.
-10. **Subscription tiers are dynamic** — stored in DB, not hardcoded. Admin manages them entirely through the UI.
-11. **MDX blog** uses Monaco Editor in admin (same editor as VS Code) for raw MDX input.
+```
+client/                         Next.js app
+  app/
+    (auth)/                     login, register, password reset
+    (protected)/                dashboard, billing, watch — login required
+    admin/                      admin area — admin role required
+    auth/callback/              exchanges emailed auth links for a session
+    page.jsx, about/, contact/  CMS-driven public pages
+  components/
+    blocks/BlockRenderer.jsx    renders CMS sections
+    admin/                      page builder, media library, settings editor
+  lib/
+    blocks.js                   block catalogue — drives builder AND renderer
+    supabase/                   browser + server Supabase clients
+    api.js                      browser API client (attaches the access token)
+    serverApi.js                server-side API fetch helpers
+
+server/src/
+  middleware/authenticate.js    verifies Supabase JWTs, loads the profile
+  services/access.js            all entitlement logic
+  routes/                       the API
+
+supabase/
+  migrations/0001_init.sql      schema, functions, RLS, storage bucket
+  seed.sql                      starter pages and settings
+```
+
+### Adding a new kind of page section
+
+1. Add an entry to `BLOCK_TYPES` in `client/lib/blocks.js` (label, description,
+   fields, defaults). This alone gives you the admin form.
+2. Add a component and a `RENDERERS` entry in
+   `client/components/blocks/BlockRenderer.jsx`.
+
+No API or database change is needed — block content is JSON.
+
+---
+
+## Deploying
+
+**Frontend — AWS Amplify.** Root directory `client/`, build `npm run build`. Add
+every variable from `client/.env.local`, with `NEXT_PUBLIC_SITE_URL` set to the
+real domain.
+
+**API — Railway.** Root directory `server/`. Add every variable from
+`server/.env`, with `CLIENT_URL` set to the deployed frontend origin (comma-
+separate if there's more than one).
+
+**Stripe.** Add a webhook endpoint pointing at
+`https://your-api-domain/api/v1/webhooks/stripe` and copy its signing secret into
+`STRIPE_WEBHOOK_SECRET`. Subscribe it to: `checkout.session.completed`,
+`customer.subscription.*`, `invoice.payment_succeeded`, `invoice.payment_failed`.
+
+**Supabase.** Add the production domain to the auth redirect allow-list and to
+the S3 bucket's CORS origins.
+
+---
+
+## Notes on a few decisions
+
+- **Express stays in front of Supabase.** Business logic that must not be
+  client-editable (Stripe checkout, entitlement grants, signed video URLs) lives
+  server-side, and a future mobile app can reuse the same API.
+- **RLS is on for every table anyway.** The API uses the service-role key and
+  bypasses it, but the policies mean the browser's anon key is safe to expose:
+  it can read published content and a user's own rows, nothing more.
+- **Entitlements are rows, not array columns.** A purchase is auditable, and
+  access checks are indexable joins.
+- **Roles are read from `profiles`, not the JWT**, so a demotion takes effect
+  within 30 seconds instead of whenever the token expires.
+- **The webhook route is mounted before `express.json()`** — Stripe signature
+  verification needs the raw body. Don't reorder it in `index.js`.

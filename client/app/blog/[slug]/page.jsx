@@ -1,19 +1,9 @@
 import { notFound } from "next/navigation";
 import { compileMDX } from "next-mdx-remote/rsc";
-import { mdxComponents } from "../../../lib/mdx-components";
+import { mdxComponents } from "@/lib/mdx-components";
+import { apiGet } from "@/lib/serverApi";
 
-async function getPost(slug) {
-  try {
-    const res = await fetch(`${process.env.API_URL}/api/v1/blog/${slug}`, {
-      next: { revalidate: 3600 },
-    });
-    if (res.status === 404) return null;
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
-}
+const getPost = (slug) => apiGet(`/api/v1/blog/${slug}`, { revalidate: 300 });
 
 export async function generateMetadata({ params }) {
   const post = await getPost(params.slug);
@@ -41,6 +31,7 @@ export default async function BlogPostPage({ params }) {
     <main className="max-w-3xl mx-auto px-4 py-12">
       {/* Cover image */}
       {post.coverImageUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={post.coverImageUrl}
           alt={post.title}

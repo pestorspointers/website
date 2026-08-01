@@ -1,16 +1,18 @@
-import { getServerSession } from 'next-auth';
 import { redirect } from 'next/navigation';
-import { authOptions } from '@/lib/auth';
+import { getSessionUser } from '@/lib/supabase/server';
 import PublicNav from '@/components/PublicNav';
 import PublicFooter from '@/components/PublicFooter';
 
 export default async function ProtectedLayout({ children }) {
-  const session = await getServerSession(authOptions);
-  if (!session) redirect('/login');
+  // The middleware already redirects anonymous visitors; this is the
+  // belt-and-braces check in case a route ever escapes the matcher.
+  const user = await getSessionUser();
+  if (!user) redirect('/login');
+
   return (
     <>
       <PublicNav />
-      <main className="min-h-screen">{children}</main>
+      <main className="min-h-screen bg-gray-50">{children}</main>
       <PublicFooter />
     </>
   );

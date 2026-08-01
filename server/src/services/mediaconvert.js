@@ -1,18 +1,21 @@
 import {
   MediaConvertClient,
   CreateJobCommand,
+  GetJobCommand,
 } from '@aws-sdk/client-mediaconvert';
 
-export async function submitTranscodeJob(videoId) {
+/**
+ * Where the HLS master playlist lands for a given video. MediaConvert names
+ * outputs after the input file, so `uploads/raw/<id>/original.mp4` becomes
+ * `videos/hls/<id>/original.m3u8` plus one rendition manifest per bitrate.
+ */
+export const hlsKeyFor = (videoId) => `videos/hls/${videoId}/original.m3u8`;
+
+function mediaConvertClient() {
   const endpoint = process.env.MEDIACONVERT_ENDPOINT;
-  const roleArn = process.env.MEDIACONVERT_ROLE_ARN;
-  const bucket = process.env.S3_BUCKET_NAME;
+  if (!endpoint) throw new Error('MEDIACONVERT_ENDPOINT is not configured');
 
-  if (!endpoint || !roleArn || !bucket) {
-    throw new Error('MediaConvert env vars not configured');
-  }
-
-  const client = new MediaConvertClient({
+  return new MediaConvertClient({
     endpoint,
     region: process.env.AWS_REGION || 'us-east-1',
     credentials: {
@@ -20,6 +23,17 @@ export async function submitTranscodeJob(videoId) {
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
     },
   });
+}
+
+export async function submitTranscodeJob(videoId) {
+  const roleArn = process.env.MEDIACONVERT_ROLE_ARN;
+  const bucket = process.env.S3_BUCKET_NAME;
+
+  if (!roleArn || !bucket) {
+    throw new Error('MEDIACONVERT_ROLE_ARN and S3_BUCKET_NAME must be configured');
+  }
+
+  const client = mediaConvertClient();
 
   const input = {
     Role: roleArn,
@@ -88,6 +102,21 @@ export async function submitTranscodeJob(videoId) {
   }
 
   return response.Job.Id;
+}
+
+/**
+ * Maps a MediaConvert job to the `videos.transcode_status` vocabulary so the
+ * admin UI can show "Processing…" and flip to "Ready" on its own.
+ */
+export async function getTranscodeJobStatus(jobId) {
+  const response = await mediaConvertClient().send(new GetJobCommand({ Id: jobId }));
+  const status = response.Job?.Status;
+
+  if (status === 'COMPLETE') return { status: 'ready', raw: status };
+  if (status === 'ERROR' || status === 'CANCELED') {
+    return { status: 'failed', raw: status, error: response.Job?.ErrorMessage };
+  }
+  return { status: 'processing', raw: status ?? 'UNKNOWN' };
 }
 
 function buildHlsOutput(nameModifier, width, height, videoBitrate, audioBitrate) {

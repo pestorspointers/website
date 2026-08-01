@@ -191,7 +191,7 @@ export default function BlogEditor({ initial, onSave, saving, error }) {
             Preview (raw MDX)
           </button>
           <div className="ml-auto px-4 py-2 text-xs text-gray-400 flex items-center">
-            MDX — use &lt;YouTube id="" /&gt; · &lt;CalloutBox type="info"&gt; · standard markdown
+            MDX — use &lt;YouTube id=&quot;&quot; /&gt; · &lt;CalloutBox type=&quot;info&quot;&gt; · standard markdown
           </div>
         </div>
 

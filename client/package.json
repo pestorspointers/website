@@ -10,10 +10,11 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.111.0",
     "@videojs/http-streaming": "^3.17.4",
     "axios": "^1.6.2",
     "next": "14.2.0",
-    "next-auth": "^4.24.5",
     "next-mdx-remote": "^6.0.0",
     "react": "^18",
     "react-dom": "^18",

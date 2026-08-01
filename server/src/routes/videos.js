@@ -1,255 +1,334 @@
 import { Router } from 'express';
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { db, unwrap } from '../config/supabase.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
-import Video from '../models/Video.js';
-import User from '../models/User.js';
-import SubscriptionTier from '../models/SubscriptionTier.js';
+import { camelize, pickSnake } from '../lib/case.js';
+import { badRequest, forbidden, notFound } from '../lib/http.js';
+import { canAccessVideo } from '../services/access.js';
 import { signCloudFrontUrl } from '../services/cloudfront.js';
-import { submitTranscodeJob } from '../services/mediaconvert.js';
-import mongoose from 'mongoose';
+import { submitTranscodeJob, getTranscodeJobStatus, hlsKeyFor } from '../services/mediaconvert.js';
 
 const router = Router();
 
-const s3 = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
-});
+const VIDEO_COLUMNS =
+  'id, title, description, s3_key, thumbnail_url, duration_seconds, access_type, course_id, position, price, is_published, transcode_status, transcode_job_id, created_at, updated_at';
 
-// ─── PUBLIC: list published videos ────────────────────────────────────────────
+let _s3;
+function s3() {
+  if (!_s3) {
+    _s3 = new S3Client({
+      region: process.env.AWS_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    });
+  }
+  return _s3;
+}
+
+function bucket() {
+  const name = process.env.S3_BUCKET_NAME;
+  if (!name) throw new Error('S3_BUCKET_NAME is not configured');
+  return name;
+}
+
+// ─── PUBLIC: free/marketing clips only ───────────────────────────────────────
 
 router.get('/', async (_req, res) => {
-  const videos = await Video.find({ isPublished: true })
-    .select('title description thumbnailUrl accessType duration price courseId createdAt')
-    .sort({ createdAt: -1 });
-  res.json(videos);
+  const rows = unwrap(
+    await db()
+      .from('videos')
+      .select('id, title, description, thumbnail_url, duration_seconds, course_id, created_at')
+      .eq('is_published', true)
+      .eq('access_type', 'public')
+      .order('created_at', { ascending: false }),
+    'list public videos'
+  );
+
+  res.json(camelize(rows));
 });
 
-// ─── ADMIN: get presigned S3 PUT URL for direct browser upload ────────────────
+// ─── ADMIN: library ──────────────────────────────────────────────────────────
 
-router.post(
-  '/upload-url',
-  authenticate,
-  requireAdmin,
-  async (req, res) => {
-    const { videoId, contentType = 'video/mp4' } = req.body;
+router.get('/admin/all', authenticate, requireAdmin, async (req, res) => {
+  let query = db()
+    .from('videos')
+    .select(`${VIDEO_COLUMNS}, courses(title, slug)`)
+    .order('created_at', { ascending: false });
 
-    if (!videoId) {
-      res.status(400).json({ error: 'videoId is required' });
-      return;
-    }
+  if (req.query.courseId) query = query.eq('course_id', req.query.courseId);
+  if (req.query.unassigned === 'true') query = query.is('course_id', null);
 
-    const bucket = process.env.S3_BUCKET_NAME;
-    if (!bucket) {
-      res.status(500).json({ error: 'S3_BUCKET_NAME not configured' });
-      return;
-    }
+  const rows = unwrap(await query, 'list videos');
 
-    const key = `uploads/raw/${videoId}/original.mp4`;
-    const command = new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      ContentType: contentType,
-    });
+  res.json(
+    rows.map((row) => ({
+      ...camelize(row),
+      courses: undefined,
+      courseTitle: row.courses?.title ?? null,
+    }))
+  );
+});
 
-    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
-    res.json({ uploadUrl, key });
+// ─── PROTECTED: the actual gate ──────────────────────────────────────────────
+//  Returns a CloudFront URL signed for two hours. This is the only place a
+//  playable video address is ever produced, so this access check is the single
+//  thing standing between a paying customer and a freeloader.
+
+router.get('/:id/stream', authenticate, async (req, res) => {
+  const video = unwrap(
+    await db()
+      .from('videos')
+      .select('id, s3_key, access_type, course_id, is_published, transcode_status')
+      .eq('id', req.params.id)
+      .maybeSingle(),
+    'load video'
+  );
+
+  if (!video || !video.is_published) throw notFound('Video not found');
+
+  if (!(await canAccessVideo(req.user, video))) {
+    throw forbidden('You do not have access to this video');
   }
-);
 
-// ─── ADMIN: trigger MediaConvert after upload completes ───────────────────────
-
-router.post(
-  '/transcode',
-  authenticate,
-  requireAdmin,
-  async (req, res) => {
-    const { videoId } = req.body;
-    if (!videoId) {
-      res.status(400).json({ error: 'videoId is required' });
-      return;
-    }
-
-    const jobId = await submitTranscodeJob(videoId);
-    res.json({ jobId });
+  if (!video.s3_key || video.transcode_status !== 'ready') {
+    throw badRequest('This video is still processing. Check back shortly.');
   }
-);
 
-// ─── ADMIN: create video metadata record ─────────────────────────────────────
+  const expiresIn = 7200;
+  res.json({ url: signCloudFrontUrl(video.s3_key, expiresIn), expiresIn });
+});
 
-router.post(
-  '/',
-  authenticate,
-  requireAdmin,
-  async (req, res) => {
-    const { title, description, s3Key, accessType, courseId, price, thumbnailUrl, duration } =
-      req.body;
+// Lets the watch page decide what to render before it asks for a stream.
+router.get('/:id/access', authenticate, async (req, res) => {
+  const video = unwrap(
+    await db()
+      .from('videos')
+      .select('id, title, description, access_type, course_id, is_published, transcode_status, courses(title, slug)')
+      .eq('id', req.params.id)
+      .maybeSingle(),
+    'load video'
+  );
 
-    if (!title || !description || !accessType) {
-      res.status(400).json({ error: 'title, description, accessType are required' });
-      return;
-    }
+  if (!video || !video.is_published) throw notFound('Video not found');
 
-    if (accessType === 'purchase' && (price === undefined || price < 0)) {
-      res.status(400).json({ error: 'price is required for purchase videos' });
-      return;
-    }
+  res.json({
+    ...camelize({ ...video, courses: undefined }),
+    courseTitle: video.courses?.title ?? null,
+    courseSlug: video.courses?.slug ?? null,
+    hasAccess: await canAccessVideo(req.user, video),
+  });
+});
 
-    const cloudFrontDomain = process.env.CLOUDFRONT_DOMAIN;
+// ─── ADMIN: write operations ─────────────────────────────────────────────────
 
-    const video = await Video.create({
-      title,
-      description,
-      s3Key,
-      cloudFrontUrl: cloudFrontDomain,
-      accessType,
-      courseId: courseId || undefined,
-      price: accessType === 'purchase' ? price : undefined,
-      thumbnailUrl,
-      duration,
-    });
+router.use(authenticate, requireAdmin);
 
-    res.status(201).json(video);
+router.post('/', async (req, res) => {
+  const { title, accessType = 'course' } = req.body;
+  if (!title) throw badRequest('title is required');
+
+  if (accessType === 'course' && !req.body.courseId) {
+    throw badRequest('Pick a course for this video, or set it to a public clip');
   }
-);
-
-// ─── PROTECTED: get signed CloudFront URL for streaming ──────────────────────
-
-router.get(
-  '/:id/stream',
-  authenticate,
-  async (req, res) => {
-    const video = await Video.findById(req.params.id);
-    if (!video || !video.isPublished) {
-      res.status(404).json({ error: 'Video not found' });
-      return;
-    }
-
-    const userId = req.user.id;
-    const hasAccess = await checkVideoAccess(userId, video);
-
-    if (!hasAccess) {
-      res.status(403).json({ error: 'Access denied' });
-      return;
-    }
-
-    if (!video.s3Key) {
-      res.status(400).json({ error: 'Video is not ready for streaming' });
-      return;
-    }
-
-    const signedUrl = signCloudFrontUrl(video.s3Key);
-    res.json({ url: signedUrl, expiresIn: 7200 });
+  if (accessType === 'purchase' && !(Number(req.body.price) > 0)) {
+    throw badRequest('Set a price for a video sold on its own');
   }
-);
 
-// ─── ADMIN: update video metadata ─────────────────────────────────────────────
+  const insert = pickSnake(req.body, [
+    'title',
+    'description',
+    'thumbnailUrl',
+    'accessType',
+    'courseId',
+    'price',
+    'durationSeconds',
+    'position',
+  ]);
 
-router.patch(
-  '/:id',
-  authenticate,
-  requireAdmin,
-  async (req, res) => {
-    const allowed = [
-      'title',
-      'description',
-      'accessType',
-      'courseId',
-      'price',
-      'thumbnailUrl',
-      'duration',
-      's3Key',
-      'isPublished',
-    ];
+  // A video sold on its own isn't part of a course, whatever was submitted.
+  if (accessType === 'purchase') insert.course_id = null;
 
-    const updateFields = {};
-    for (const key of allowed) {
-      if (key in req.body) {
-        updateFields[key] = req.body[key];
-      }
-    }
-
-    const video = await Video.findByIdAndUpdate(req.params.id, updateFields, {
-      new: true,
-      runValidators: true,
-    });
-
-    if (!video) {
-      res.status(404).json({ error: 'Video not found' });
-      return;
-    }
-
-    res.json(video);
+  // Land new videos at the end of their course.
+  if (insert.course_id && insert.position === undefined) {
+    const { count } = await db()
+      .from('videos')
+      .select('id', { count: 'exact', head: true })
+      .eq('course_id', insert.course_id);
+    insert.position = count ?? 0;
   }
-);
 
-// ─── ADMIN: delete video + S3 objects ────────────────────────────────────────
+  const video = unwrap(
+    await db().from('videos').insert(insert).select(VIDEO_COLUMNS).single(),
+    'create video'
+  );
 
-router.delete(
-  '/:id',
-  authenticate,
-  requireAdmin,
-  async (req, res) => {
-    const video = await Video.findById(req.params.id);
-    if (!video) {
-      res.status(404).json({ error: 'Video not found' });
-      return;
-    }
+  res.status(201).json(camelize(video));
+});
 
-    const bucket = process.env.S3_BUCKET_NAME;
-    if (bucket && video.s3Key) {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: video.s3Key }));
+// Step 1 of upload: a presigned PUT straight to the private bucket, so the
+// file never passes through this server.
+router.post('/:id/upload-url', async (req, res) => {
+  const { contentType = 'video/mp4' } = req.body;
 
-      const rawKey = `uploads/raw/${video._id}/original.mp4`;
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: rawKey })).catch(() => {});
-    }
+  const video = unwrap(
+    await db().from('videos').select('id').eq('id', req.params.id).maybeSingle(),
+    'load video'
+  );
+  if (!video) throw notFound('Video not found');
 
-    await video.deleteOne();
-    res.json({ success: true });
+  const key = `uploads/raw/${video.id}/original.mp4`;
+  const uploadUrl = await getSignedUrl(
+    s3(),
+    new PutObjectCommand({ Bucket: bucket(), Key: key, ContentType: contentType }),
+    { expiresIn: 3600 }
+  );
+
+  res.json({ uploadUrl, key });
+});
+
+// Step 2: hand the raw upload to MediaConvert and remember where the HLS
+// manifest will appear.
+router.post('/:id/transcode', async (req, res) => {
+  const video = unwrap(
+    await db().from('videos').select('id').eq('id', req.params.id).maybeSingle(),
+    'load video'
+  );
+  if (!video) throw notFound('Video not found');
+
+  const jobId = await submitTranscodeJob(video.id);
+
+  const updated = unwrap(
+    await db()
+      .from('videos')
+      .update({
+        transcode_status: 'processing',
+        transcode_job_id: jobId,
+        s3_key: hlsKeyFor(video.id),
+      })
+      .eq('id', video.id)
+      .select(VIDEO_COLUMNS)
+      .single(),
+    'save transcode job'
+  );
+
+  res.json(camelize(updated));
+});
+
+// Step 3: the admin UI polls this until it says ready.
+router.get('/:id/transcode-status', async (req, res) => {
+  const video = unwrap(
+    await db()
+      .from('videos')
+      .select('id, transcode_status, transcode_job_id')
+      .eq('id', req.params.id)
+      .maybeSingle(),
+    'load video'
+  );
+  if (!video) throw notFound('Video not found');
+
+  if (!video.transcode_job_id || video.transcode_status === 'ready') {
+    return res.json({ status: video.transcode_status });
   }
-);
 
-// ─── Access control helper ────────────────────────────────────────────────────
+  const { status, error } = await getTranscodeJobStatus(video.transcode_job_id);
 
-async function checkVideoAccess(userId, video) {
-  if (video.accessType === 'public') return true;
-
-  const user = await User.findById(userId).populate('subscription.tierId');
-  if (!user) return false;
-
-  if (video.accessType === 'purchase') {
-    return user.purchasedVideoIds.some((id) =>
-      id.equals(video._id)
+  if (status !== video.transcode_status) {
+    unwrap(
+      await db().from('videos').update({ transcode_status: status }).eq('id', video.id),
+      'update transcode status'
     );
   }
 
-  if (video.accessType === 'course') {
-    // Check if user purchased the course directly
-    if (
-      video.courseId &&
-      user.purchasedCourseIds.some((id) => id.equals(video.courseId))
-    ) {
-      return true;
-    }
+  res.json({ status, error });
+});
 
-    // Check if user has an active subscription whose tier unlocks this course
-    if (user.subscription.status === 'active' && user.subscription.tierId) {
-      const tier = await SubscriptionTier.findById(user.subscription.tierId);
-      if (
-        tier &&
-        video.courseId &&
-        tier.unlockedCourseIds.some((id) => id.equals(video.courseId))
-      ) {
-        return true;
-      }
-    }
+router.patch('/:id', async (req, res) => {
+  const updates = pickSnake(req.body, [
+    'title',
+    'description',
+    'thumbnailUrl',
+    'accessType',
+    'courseId',
+    'price',
+    'durationSeconds',
+    'position',
+    'isPublished',
+  ]);
+
+  const current = unwrap(
+    await db().from('videos').select('access_type, course_id').eq('id', req.params.id).maybeSingle(),
+    'load video'
+  );
+  if (!current) throw notFound('Video not found');
+
+  const accessType = updates.access_type ?? current.access_type;
+  const courseId = 'course_id' in updates ? updates.course_id : current.course_id;
+
+  if (accessType === 'course' && !courseId) {
+    throw badRequest('A course video must belong to a course');
+  }
+  // A public clip shouldn't sit inside a paid course's video list.
+  if (accessType === 'purchase') updates.course_id = null;
+
+  const video = unwrap(
+    await db().from('videos').update(updates).eq('id', req.params.id).select(VIDEO_COLUMNS).single(),
+    'update video'
+  );
+
+  res.json(camelize(video));
+});
+
+router.delete('/:id', async (req, res) => {
+  const video = unwrap(
+    await db().from('videos').select('id, s3_key').eq('id', req.params.id).maybeSingle(),
+    'load video'
+  );
+  if (!video) throw notFound('Video not found');
+
+  if (process.env.S3_BUCKET_NAME) {
+    // Transcoding fans one upload out into dozens of segment files, so clear
+    // the whole prefix rather than just the manifest.
+    await deletePrefix(`videos/hls/${video.id}/`).catch(() => {});
+    await s3()
+      .send(
+        new DeleteObjectCommand({
+          Bucket: bucket(),
+          Key: `uploads/raw/${video.id}/original.mp4`,
+        })
+      )
+      .catch(() => {});
   }
 
-  return false;
+  unwrap(await db().from('videos').delete().eq('id', video.id), 'delete video');
+  res.json({ success: true });
+});
+
+async function deletePrefix(prefix) {
+  let token;
+  do {
+    const listed = await s3().send(
+      new ListObjectsV2Command({ Bucket: bucket(), Prefix: prefix, ContinuationToken: token })
+    );
+
+    const keys = (listed.Contents ?? []).map((o) => ({ Key: o.Key }));
+    if (keys.length) {
+      await s3().send(
+        new DeleteObjectsCommand({ Bucket: bucket(), Delete: { Objects: keys } })
+      );
+    }
+
+    token = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+  } while (token);
 }
 
 export default router;

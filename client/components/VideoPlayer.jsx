@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import videojs from 'video.js';
-import 'video.js/dist/video-css/video-js.css';
+import 'video.js/dist/video-js.css';
 
 export default function VideoPlayer({ src, poster }) {
   const videoRef = useRef(null);

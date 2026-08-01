@@ -1,54 +1,45 @@
 'use client';
 
-import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import api from '@/lib/api';
 
-const API = process.env.NEXT_PUBLIC_API_URL;
-
-export default function PurchaseButton({ courseId, price }) {
-  const { data: session, status } = useSession();
+export default function PurchaseButton({ courseId, slug, isAuthenticated }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  async function handlePurchase() {
-    if (status === 'unauthenticated') {
-      router.push('/login?redirect=/courses');
+  const buy = async () => {
+    // Checkout needs an account to attach the purchase to.
+    if (!isAuthenticated) {
+      router.push(`/login?next=/courses/${slug}`);
       return;
     }
 
-    const token = session?.user?.accessToken;
-    if (!token) return;
-
-    setLoading(true);
     setError('');
+    setLoading(true);
 
     try {
-      const res = await fetch(`${API}/api/v1/courses/${courseId}/checkout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Checkout failed'); return; }
+      const { data } = await api.post(`/api/v1/courses/${courseId}/checkout`);
       window.location.href = data.url;
-    } catch {
-      setError('Something went wrong. Please try again.');
-    } finally {
+    } catch (err) {
+      setError(err.message);
       setLoading(false);
     }
-  }
+  };
 
   return (
-    <div className="space-y-2">
+    <>
       <button
-        onClick={handlePurchase}
+        type="button"
+        onClick={buy}
         disabled={loading}
-        className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
+        className="w-full py-3 bg-[#f53100] text-white font-bold rounded-xl hover:bg-[#d42a00] transition-colors disabled:opacity-50"
       >
-        {loading ? 'Redirecting…' : `Buy for $${price.toFixed(2)}`}
+        {loading ? 'Opening checkout…' : isAuthenticated ? 'Buy this course' : 'Sign in to buy'}
       </button>
-      {error && <p className="text-red-600 text-xs text-center">{error}</p>}
-    </div>
+
+      {error && <p className="text-sm text-red-600 mt-3">{error}</p>}
+    </>
   );
 }
