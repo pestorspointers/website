@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { apiGet } from '@/lib/serverApi';
+import { fetchPosts } from '@/lib/publicData';
 
 export const revalidate = 300;
 
@@ -9,11 +9,7 @@ export const metadata = {
 };
 
 export default async function BlogPage() {
-  const data = await apiGet('/api/v1/blog?limit=20', {
-    revalidate: 300,
-    fallback: { posts: [] },
-  });
-  const posts = data?.posts ?? [];
+  const { posts } = await fetchPosts({ limit: 20 });
 
   return (
     <main className="max-w-4xl mx-auto px-4 py-14">

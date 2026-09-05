@@ -1,8 +1,8 @@
-import { apiGet } from './serverApi';
+import { fetchPage } from './publicData';
 
 /** Fetch a CMS page (and its visible blocks, in order) by slug. */
 export async function getPage(slug) {
-  return apiGet(`/api/v1/pages/${slug}`, { revalidate: 60, fallback: null });
+  return fetchPage(slug);
 }
 
 /** Page metadata for Next's generateMetadata(). */

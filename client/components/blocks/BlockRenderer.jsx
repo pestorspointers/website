@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { apiGet } from '@/lib/serverApi';
+import { fetchCourses, fetchTiers, fetchPosts } from '@/lib/publicData';
 
 /**
  * Renders the blocks that make up a CMS page.
@@ -556,7 +556,7 @@ function Spacer({ content }) {
 async function CourseGrid({ content }) {
   const { heading, viewAllLabel, limit = 3, background = 'light' } = content;
 
-  const courses = (await apiGet('/api/v1/courses', { revalidate: 300, fallback: [] })) ?? [];
+  const courses = await fetchCourses();
   if (!courses.length) return null;
 
   const dark = isDark(background);
@@ -631,7 +631,7 @@ async function Pricing({ content }) {
     emptyCtaHref = '/register',
   } = content;
 
-  const tiers = (await apiGet('/api/v1/payments/tiers', { revalidate: 300, fallback: [] })) ?? [];
+  const tiers = await fetchTiers();
   const dark = isDark(background);
 
   return (
@@ -729,11 +729,7 @@ async function Pricing({ content }) {
 async function BlogGrid({ content }) {
   const { heading, viewAllLabel, limit = 3, background = 'white' } = content;
 
-  const data = await apiGet(`/api/v1/blog?limit=${Number(limit) || 3}`, {
-    revalidate: 300,
-    fallback: { posts: [] },
-  });
-  const posts = data?.posts ?? [];
+  const { posts } = await fetchPosts({ limit: Number(limit) || 3 });
   if (!posts.length) return null;
 
   const dark = isDark(background);

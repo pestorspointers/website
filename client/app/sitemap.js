@@ -1,11 +1,11 @@
-import { apiGet } from '@/lib/serverApi';
+import { fetchCourses, fetchPosts } from '@/lib/publicData';
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000';
 
 export default async function sitemap() {
   const [courses, blog] = await Promise.all([
-    apiGet('/api/v1/courses', { revalidate: 3600, fallback: [] }),
-    apiGet('/api/v1/blog?limit=50', { revalidate: 3600, fallback: { posts: [] } }),
+    fetchCourses(),
+    fetchPosts({ limit: 50 }),
   ]);
 
   const staticPages = ['', '/about', '/contact', '/courses', '/blog'].map((path) => ({

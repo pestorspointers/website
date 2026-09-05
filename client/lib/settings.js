@@ -1,4 +1,4 @@
-import { apiGet } from './serverApi';
+import { fetchSettings } from './publicData';
 
 /**
  * Site-wide config the admin edits under Admin → Site Settings. Defaults keep
@@ -35,7 +35,7 @@ const DEFAULTS = {
 };
 
 export async function getSettings() {
-  const settings = (await apiGet('/api/v1/settings', { revalidate: 60, fallback: {} })) ?? {};
+  const settings = await fetchSettings();
 
   return {
     brand: { ...DEFAULTS.brand, ...(settings.brand ?? {}) },

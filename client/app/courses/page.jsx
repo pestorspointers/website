@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { apiGet } from '@/lib/serverApi';
+import { fetchCourses } from '@/lib/publicData';
 
 export const revalidate = 300;
 
@@ -9,7 +9,7 @@ export const metadata = {
 };
 
 export default async function CoursesPage() {
-  const courses = (await apiGet('/api/v1/courses', { revalidate: 300, fallback: [] })) ?? [];
+  const courses = await fetchCourses();
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-14">

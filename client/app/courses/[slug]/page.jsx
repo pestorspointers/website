@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { apiGet, apiGetPersonalized } from '@/lib/serverApi';
+import { fetchCourse } from '@/lib/publicData';
 import { getSessionUser } from '@/lib/supabase/server';
 import PurchaseButton from './PurchaseButton';
 
@@ -8,7 +8,7 @@ import PurchaseButton from './PurchaseButton';
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({ params }) {
-  const course = await apiGet(`/api/v1/courses/${params.slug}`, { revalidate: 300 });
+  const course = await fetchCourse(params.slug);
   if (!course) return { title: 'Course not found' };
 
   return {
@@ -20,7 +20,7 @@ export async function generateMetadata({ params }) {
 
 export default async function CourseDetailPage({ params, searchParams }) {
   const [course, user] = await Promise.all([
-    apiGetPersonalized(`/api/v1/courses/${params.slug}`),
+    fetchCourse(params.slug),
     getSessionUser(),
   ]);
 

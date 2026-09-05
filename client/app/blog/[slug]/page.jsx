@@ -1,9 +1,9 @@
 import { notFound } from "next/navigation";
 import { compileMDX } from "next-mdx-remote/rsc";
 import { mdxComponents } from "@/lib/mdx-components";
-import { apiGet } from "@/lib/serverApi";
+import { fetchPost } from "@/lib/publicData";
 
-const getPost = (slug) => apiGet(`/api/v1/blog/${slug}`, { revalidate: 300 });
+const getPost = (slug) => fetchPost(slug);
 
 export async function generateMetadata({ params }) {
   const post = await getPost(params.slug);
