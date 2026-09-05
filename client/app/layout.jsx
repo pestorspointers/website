@@ -1,8 +1,10 @@
-import { Inter } from 'next/font/google';
+import { Karla } from 'next/font/google';
 import './globals.css';
 import { getSettings } from '@/lib/settings';
 
-const inter = Inter({ subsets: ['latin'] });
+// Karla is the typeface pestorspointers.com uses; keeping it makes the
+// default look a faithful mirror of the Kajabi site.
+const karla = Karla({ subsets: ['latin'], weight: ['400', '700'] });
 
 export async function generateMetadata() {
   const { brand } = await getSettings();
@@ -24,7 +26,7 @@ export async function generateMetadata() {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className={inter.className}>{children}</body>
+      <body className={karla.className}>{children}</body>
     </html>
   );
 }
