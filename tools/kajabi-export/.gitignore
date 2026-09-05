@@ -1,0 +1,8 @@
+# The export itself — gigabytes of video and images. Back it up separately
+# (external drive / cloud), never commit it.
+export/
+
+# Saved Kajabi session cookies. Treat as credentials.
+.auth/
+
+node_modules/

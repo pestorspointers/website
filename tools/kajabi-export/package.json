@@ -1,0 +1,18 @@
+{
+  "name": "kajabi-export",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One-shot exporter that mirrors a Kajabi site (public pages + member programs) to disk before the account is cancelled.",
+  "scripts": {
+    "setup": "playwright install chromium",
+    "login": "node login.js",
+    "crawl": "node crawl.js",
+    "videos": "node videos.js",
+    "report": "node report.js",
+    "all": "node crawl.js && node videos.js && node report.js"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}

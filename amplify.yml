@@ -1,0 +1,27 @@
+# AWS Amplify build settings.
+#
+# A committed amplify.yml overrides whatever the console auto-detected. Amplify
+# was picking pnpm off the root pnpm-lock.yaml (which only covers the local
+# AWS-SDK tooling) and failing with "pnpm: command not found" — the deployable
+# app is client/, and it uses npm.
+#
+# Each phase runs in its own shell, so the `cd client` is repeated per phase.
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - cd client
+        - npm ci
+    build:
+      commands:
+        - cd client
+        - npm run build
+  artifacts:
+    baseDirectory: client/.next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - client/node_modules/**/*
+      - client/.next/cache/**/*

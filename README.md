@@ -154,6 +154,30 @@ on its own. Uploading is: create → upload to S3 → transcode. The badge flips
 *Processing…* to *Ready to play* on its own; a video can only be published once
 it's ready.
 
+For bulk imports the admin UI is the wrong tool — use
+[`server/scripts/import-videos.js`](server/scripts/import-videos.js), which takes
+a list of videos and, one at a time, creates the row, streams the file down,
+multipart-uploads it to `uploads/raw/<id>/original.mp4`, verifies the size and
+deletes the local copy before moving on. Never more than one file on disk. It
+skips anything already in the bucket, so re-running after an interruption is
+cheap and safe.
+
+```bash
+cd server
+node scripts/import-videos.js --from ../tools/kajabi-export/export/videos/index.json --dry-run
+node scripts/import-videos.js --from … --course get-unstuck --transcode --publish
+```
+
+If some files were already moved into the bucket by hand under different names,
+add `--adopt`. It indexes the bucket, matches each source against it by name and
+**server-side copies** the winners into place — no download, no egress. Matching
+treats numbering as a hard constraint, so `Lesson 3` will never be adopted for
+`Lesson 4`; near-ties are reported for you to resolve rather than guessed at.
+Always run it with `--dry-run` first and read the match table.
+
+[`scripts/inspect-s3.js`](server/scripts/inspect-s3.js) reports what is already
+in the bucket and how it lines up with the `videos` table.
+
 **Memberships** — recurring plans, and which courses each one unlocks. Changing a
 price creates a new price in Stripe; existing subscribers keep paying what they
 signed up for.

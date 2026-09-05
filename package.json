@@ -8,5 +8,9 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudfront": "^3.1109.0",
+    "@aws-sdk/client-iam": "^3.1109.0"
   }
 }
