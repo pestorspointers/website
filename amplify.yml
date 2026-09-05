@@ -5,18 +5,18 @@
 # AWS-SDK tooling) and failing with "pnpm: command not found" — the deployable
 # app is client/, and it uses npm.
 #
-# Each phase runs in its own shell, so the `cd client` is repeated per phase.
+# Note: the build shell keeps its working directory between phases, so a `cd`
+# in preBuild would leak into build. `--prefix` keeps every command independent
+# of where the shell happens to be.
 version: 1
 frontend:
   phases:
     preBuild:
       commands:
-        - cd client
-        - npm ci
+        - npm --prefix client ci
     build:
       commands:
-        - cd client
-        - npm run build
+        - npm --prefix client run build
   artifacts:
     baseDirectory: client/.next
     files:
