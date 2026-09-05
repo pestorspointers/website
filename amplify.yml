@@ -1,27 +1,30 @@
 # AWS Amplify build settings.
 #
-# A committed amplify.yml overrides whatever the console auto-detected. Amplify
-# was picking pnpm off the root pnpm-lock.yaml (which only covers the local
-# AWS-SDK tooling) and failing with "pnpm: command not found" — the deployable
-# app is client/, and it uses npm.
+# The deployable app is client/, not the repo root. Amplify's native Next.js SSR
+# support keys off the app root's package.json, so the app root has to be
+# client/ — otherwise it finds no `next` dependency, skips the Next adapter, and
+# the deploy fails looking for a deploy-manifest.json we never produce.
 #
-# Note: the build shell keeps its working directory between phases, so a `cd`
-# in preBuild would leak into build. `--prefix` keeps every command independent
-# of where the shell happens to be.
+# This `applications:`/`appRoot:` format is Amplify's monorepo layout. It pairs
+# with the AMPLIFY_MONOREPO_APP_ROOT=client environment variable on the app —
+# both must be set, or the build won't match an application block. Amplify cds
+# into appRoot itself, so the commands below are plain npm.
 version: 1
-frontend:
-  phases:
-    preBuild:
-      commands:
-        - npm --prefix client ci
-    build:
-      commands:
-        - npm --prefix client run build
-  artifacts:
-    baseDirectory: client/.next
-    files:
-      - '**/*'
-  cache:
-    paths:
-      - client/node_modules/**/*
-      - client/.next/cache/**/*
+applications:
+  - appRoot: client
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: .next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*
+          - .next/cache/**/*
