@@ -2,10 +2,11 @@ import { Router } from 'express';
 import { db, unwrap } from '../config/supabase.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { camelize } from '../lib/case.js';
-import { badRequest, notFound } from '../lib/http.js';
+import { badRequest, notFound, isUuid, unavailable } from '../lib/http.js';
 import { getEntitlements } from '../services/access.js';
 import { ensureStripeCustomer } from './courses.js';
-import getStripe from '../services/stripe.js';
+import getStripe, { stripeEnabled } from '../services/stripe.js';
+import { syncTierToStripe } from '../services/tierStripe.js';
 
 const router = Router();
 
@@ -40,19 +41,28 @@ router.post('/create-checkout-session', async (req, res) => {
   const { tierId, interval = 'monthly' } = req.body;
   if (!tierId) throw badRequest('tierId is required');
 
-  const tier = unwrap(
-    await db()
-      .from('subscription_tiers')
-      .select('id, name, is_active, stripe_price_monthly_id, stripe_price_annual_id')
-      .eq('id', tierId)
-      .maybeSingle(),
+  if (!stripeEnabled()) {
+    throw unavailable("Online payments aren't set up yet. Please check back soon.");
+  }
+  if (!['monthly', 'annual'].includes(interval)) {
+    throw badRequest('interval must be monthly or annual');
+  }
+  if (!isUuid(tierId)) throw notFound('That plan is no longer available');
+
+  const found = unwrap(
+    await db().from('subscription_tiers').select('*').eq('id', tierId).maybeSingle(),
     'load tier'
   );
-  if (!tier || !tier.is_active) throw notFound('That plan is no longer available');
+  if (!found || !found.is_active) throw notFound('That plan is no longer available');
 
+  // A plan may have been created before Stripe was connected, or repriced since
+  // its last sync. Make sure the Stripe side exists before sending anyone to pay.
+  const tier = await syncTierToStripe(found);
   const priceId =
     interval === 'annual' ? tier.stripe_price_annual_id : tier.stripe_price_monthly_id;
-  if (!priceId) throw badRequest(`This plan has no ${interval} price configured`);
+  if (!priceId) {
+    throw badRequest(`This plan has no ${interval === 'annual' ? 'yearly' : 'monthly'} option`);
+  }
 
   const customerId = await ensureStripeCustomer(req.user);
 

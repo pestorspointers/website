@@ -1,6 +1,8 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { apiGetAuthed } from '@/lib/serverApi';
 import { getProfile } from '@/lib/supabase/server';
+import SignOutButton from '@/components/SignOutButton';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,8 +17,14 @@ const STATUS_COPY = {
 };
 
 export default async function DashboardPage() {
-  const [profile, mine, subscription] = await Promise.all([
-    getProfile(),
+  const profile = await getProfile();
+
+  // This dashboard is for members. Admins run the site from /admin, so every
+  // route that lands here — sign-in, email links, Stripe returns, the nav —
+  // sends them on to the admin panel instead.
+  if (profile?.role === 'admin') redirect('/admin');
+
+  const [mine, subscription] = await Promise.all([
     apiGetAuthed('/api/v1/courses/mine', { fallback: { courses: [] } }),
     apiGetAuthed('/api/v1/payments/subscription'),
   ]);
@@ -27,10 +35,18 @@ export default async function DashboardPage() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-12">
-      <h1 className="text-3xl font-bold text-[#161E2A] mb-1">
-        Welcome back{profile?.full_name ? `, ${profile.full_name.split(' ')[0]}` : ''}
-      </h1>
-      <p className="text-gray-500 mb-8">Everything you have access to lives here.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
+        <div>
+          <h1 className="text-3xl font-bold text-[#161E2A] mb-1">
+            Welcome back{profile?.full_name ? `, ${profile.full_name.split(' ')[0]}` : ''}
+          </h1>
+          <p className="text-gray-500">Everything you have access to lives here.</p>
+        </div>
+
+        <SignOutButton className="px-4 py-2 border-2 border-[#100566] text-[#100566] text-sm font-semibold rounded-lg hover:bg-[#100566] hover:text-white transition-colors">
+          Log out
+        </SignOutButton>
+      </div>
 
       {/* ── Membership ── */}
       <section className="bg-white border rounded-2xl p-6 mb-8">

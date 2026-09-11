@@ -44,16 +44,13 @@ export default function NavMenu({ links, isAuthenticated, isAdmin }) {
 
           <div className="pt-3 border-t border-gray-100 space-y-2">
             {isAuthenticated ? (
-              <>
-                {isAdmin && (
-                  <Link href="/admin" onClick={close} className="block px-2 py-2 text-sm font-medium text-gray-700">
-                    Admin
-                  </Link>
-                )}
-                <Link href="/dashboard" onClick={close} className="block px-2 py-2 text-sm font-semibold text-[#f53100]">
-                  My Dashboard
-                </Link>
-              </>
+              <Link
+                href={isAdmin ? '/admin' : '/dashboard'}
+                onClick={close}
+                className="block px-2 py-2 text-sm font-semibold text-[#f53100]"
+              >
+                {isAdmin ? 'Admin Panel' : 'My Dashboard'}
+              </Link>
             ) : (
               <>
                 <Link href="/login" onClick={close} className="block px-2 py-2 text-sm font-medium text-gray-700">

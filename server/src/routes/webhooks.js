@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { db, unwrap } from '../config/supabase.js';
+import { isUuid } from '../lib/http.js';
 import { invalidateProfile } from '../middleware/authenticate.js';
 import { grantPurchase, recordInvoicePayment } from '../services/access.js';
 import getStripe from '../services/stripe.js';
@@ -36,6 +37,14 @@ async function tierByPriceId(priceId) {
   );
 }
 
+async function tierById(id) {
+  if (!isUuid(id)) return null;
+  return unwrap(
+    await db().from('subscription_tiers').select('id').eq('id', id).maybeSingle(),
+    'find tier by id'
+  );
+}
+
 async function updateProfile(userId, patch) {
   unwrap(await db().from('profiles').update(patch).eq('id', userId), 'update profile');
   // The auth middleware caches profiles briefly; drop it so the very next
@@ -63,7 +72,14 @@ async function syncSubscription(subscription) {
   if (!profile) return null;
 
   const item = subscription.items?.data?.[0];
-  const tier = await tierByPriceId(item?.price?.id);
+  // Match on the price first. A subscriber on a price the plan has since moved
+  // off (because an admin changed the amount) won't match that way, so fall
+  // back to the plan id stamped on the subscription at checkout and on every
+  // price we create. Without this, a price change would strip existing
+  // members of their courses at their next renewal.
+  const tier =
+    (await tierByPriceId(item?.price?.id)) ??
+    (await tierById(subscription.metadata?.tierId ?? item?.price?.metadata?.tierId));
 
   // `current_period_end` sits on the subscription in older API versions and on
   // the item in newer ones — accept either.

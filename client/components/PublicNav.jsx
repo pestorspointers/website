@@ -7,6 +7,8 @@ export default async function PublicNav() {
   const [{ brand, nav }, profile] = await Promise.all([getSettings(), getProfile()]);
 
   const links = nav.links ?? [];
+  // One way in for each: admins get the admin panel, members their dashboard.
+  // Admins never use /dashboard.
   const isAdmin = profile?.role === 'admin';
 
   return (
@@ -41,22 +43,12 @@ export default async function PublicNav() {
 
         <div className="hidden md:flex items-center gap-3">
           {profile ? (
-            <>
-              {isAdmin && (
-                <Link
-                  href="/admin"
-                  className="text-sm font-medium text-gray-700 hover:text-[#f53100] transition-colors"
-                >
-                  Admin
-                </Link>
-              )}
-              <Link
-                href="/dashboard"
-                className="text-sm font-semibold px-4 py-2 bg-[#f53100] text-white rounded-lg hover:bg-[#d42a00] transition-colors"
-              >
-                My Dashboard
-              </Link>
-            </>
+            <Link
+              href={isAdmin ? '/admin' : '/dashboard'}
+              className="text-sm font-semibold px-4 py-2 bg-[#f53100] text-white rounded-lg hover:bg-[#d42a00] transition-colors"
+            >
+              {isAdmin ? 'Admin Panel' : 'My Dashboard'}
+            </Link>
           ) : (
             <>
               <Link

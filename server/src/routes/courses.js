@@ -3,9 +3,9 @@ import { db, unwrap } from '../config/supabase.js';
 import { authenticate, optionalAuth } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { camelize, pickSnake } from '../lib/case.js';
-import { assertUuids, badRequest, conflict, notFound, slugify } from '../lib/http.js';
+import { assertUuids, badRequest, conflict, notFound, slugify, unavailable } from '../lib/http.js';
 import { canAccessCourse, getEntitlements } from '../services/access.js';
-import getStripe from '../services/stripe.js';
+import getStripe, { stripeEnabled } from '../services/stripe.js';
 
 const router = Router();
 
@@ -146,6 +146,10 @@ router.get('/:slug', optionalAuth, async (req, res) => {
 // ─── PROTECTED: buy a course outright ────────────────────────────────────────
 
 router.post('/:id/checkout', authenticate, async (req, res) => {
+  if (!stripeEnabled()) {
+    throw unavailable("Online payments aren't set up yet. Please check back soon.");
+  }
+
   const course = unwrap(
     await db()
       .from('courses')
@@ -196,18 +200,15 @@ router.post('/', async (req, res) => {
   );
   if (existing) throw conflict(`The URL "${slug}" is already taken`);
 
-  const product = await getStripe().products.create({
-    name: title,
-    ...(description ? { description } : {}),
-  });
-
+  // No Stripe call here. The product and price are created on first checkout
+  // (ensureCoursePrice), so a course can be built before payments are
+  // connected, and a Stripe outage can't block adding one.
   const insert = {
     ...pickSnake(req.body, ['title', 'description', 'shortDescription', 'thumbnailUrl', 'price', 'displayOrder']),
     slug,
     title,
     description,
     price,
-    stripe_product_id: product.id,
   };
 
   const course = unwrap(
@@ -252,7 +253,7 @@ router.patch('/:id', async (req, res) => {
   }
 
   // Keep the Stripe product in step with the catalogue.
-  if (course.stripe_product_id) {
+  if (course.stripe_product_id && stripeEnabled()) {
     const productUpdate = {};
     if (updates.title && updates.title !== course.title) productUpdate.name = updates.title;
     if (updates.description && updates.description !== course.description) {
@@ -355,7 +356,7 @@ router.delete('/:id', async (req, res) => {
   if (!course) throw notFound('Course not found');
 
   // Archive rather than delete in Stripe so past invoices stay intact.
-  if (course.stripe_product_id) {
+  if (course.stripe_product_id && stripeEnabled()) {
     await getStripe()
       .products.update(course.stripe_product_id, { active: false })
       .catch(() => {});

@@ -6,8 +6,10 @@ import { NextResponse } from 'next/server';
  * tokens are short-lived) and to bounce anonymous visitors away from private
  * routes.
  *
- * Role checks live in `app/admin/layout.jsx` rather than here — the layout has
- * to verify them anyway, and doing it once keeps a single source of truth.
+ * Role checks live in the pages rather than here, since they need a database
+ * read: `app/admin/layout.jsx` keeps members out of /admin, and
+ * `app/(protected)/dashboard/page.jsx` sends admins on to /admin. That is why a
+ * signed-in admin bounced off /login below lands on /admin, not /dashboard.
  */
 
 const PRIVATE_PREFIXES = ['/dashboard', '/billing', '/watch', '/admin', '/account'];
