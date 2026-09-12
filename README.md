@@ -273,8 +273,24 @@ console at all, grant the Amplify compute role S3 and MediaConvert access and
 leave both key variables unset — the SDK will use the role. `APP_AWS_REGION` is
 required either way, and the app fails loudly if it is missing.
 
-`/api/v1/health` returns `{"status":"ok"}` on a healthy deploy, and is the
-quickest way to tell a broken build from a broken environment variable.
+Amplify gives console environment variables to the **build**, not to the server
+that runs afterwards. Anything prefixed `NEXT_PUBLIC_` survives anyway, because
+Next compiles those values into the bundle — which is exactly what makes this
+confusing, since the public pages keep working while every route that needs the
+service-role key returns a 500. The build command in `amplify.yml` writes the
+server-side variables into `.env.production`, which Next does read at runtime.
+**Add any new server-side variable to that grep list**, or it will work
+everywhere except production.
+
+`/api/v1/health` reports which groups of settings actually arrived:
+
+```json
+{"status":"ok","configured":{"supabase":true,"stripe":false,"stripeWebhook":false,
+ "s3":true,"cloudfront":false,"mediaconvert":true}}
+```
+
+It reports presence only, never a value. A `false` there is a missing variable;
+a healthy `status` with a failing route is something else.
 
 **Stripe.** Add a webhook endpoint pointing at
 `https://yourdomain.com/api/v1/webhooks/stripe` and copy its signing secret into

@@ -18,6 +18,8 @@
  */
 
 import { Router } from './router.js';
+import { supabaseUrl } from './config/supabase.js';
+import { stripeEnabled } from './services/stripe.js';
 
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
@@ -52,6 +54,35 @@ app.use('/api/v1/pages', pagesRoutes);
 app.use('/api/v1/media', mediaRoutes);
 app.use('/api/v1/settings', settingsRoutes);
 
-app.get('/api/v1/health', (_req, res) => res.json({ status: 'ok' }));
+/**
+ * Liveness plus a configuration read-out. It reports only whether each group of
+ * variables is present, never a value, and it is the fastest way to tell a
+ * broken deploy from a missing setting — the distinction that is otherwise
+ * invisible, because a missing secret surfaces as a generic 500.
+ */
+app.get('/api/v1/health', (_req, res) =>
+  res.json({
+    status: 'ok',
+    configured: {
+      supabase: Boolean(
+        supabaseUrl() &&
+          (process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY)
+      ),
+      stripe: stripeEnabled(),
+      stripeWebhook: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+      s3: Boolean(
+        process.env.S3_BUCKET_NAME && (process.env.APP_AWS_REGION || process.env.AWS_REGION)
+      ),
+      cloudfront: Boolean(
+        process.env.CLOUDFRONT_DOMAIN &&
+          process.env.CLOUDFRONT_KEY_PAIR_ID &&
+          process.env.CLOUDFRONT_PRIVATE_KEY
+      ),
+      mediaconvert: Boolean(
+        process.env.MEDIACONVERT_ENDPOINT && process.env.MEDIACONVERT_ROLE_ARN
+      ),
+    },
+  })
+);
 
 export default app;

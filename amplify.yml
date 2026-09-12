@@ -23,6 +23,20 @@ applications:
             - npm ci
         build:
           commands:
+            # Amplify hands console environment variables to the BUILD, not to
+            # the server that runs afterwards. Anything with a NEXT_PUBLIC_
+            # prefix survives regardless, because Next compiles those values
+            # into the bundle — which is why the public pages worked while
+            # every route needing the service-role key returned a 500.
+            #
+            # Writing them into .env.production is AWS's documented fix: Next
+            # loads that file at runtime, so the API gets its secrets. Add any
+            # new server-side variable to this list or it will be missing in
+            # production and present everywhere else.
+            - >-
+              env | grep -E
+              '^(SUPABASE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|APP_AWS_REGION|APP_AWS_ACCESS_KEY_ID|APP_AWS_SECRET_ACCESS_KEY|S3_BUCKET_NAME|CLOUDFRONT_DOMAIN|CLOUDFRONT_KEY_PAIR_ID|CLOUDFRONT_PRIVATE_KEY|MEDIACONVERT_ENDPOINT|MEDIACONVERT_ROLE_ARN)='
+              >> .env.production || echo 'no server-side variables matched'
             - npm run build
       artifacts:
         baseDirectory: .next

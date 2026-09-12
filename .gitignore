@@ -2,6 +2,9 @@ node_modules/
 .env
 .env.local
 .env.*.local
+# Written by the Amplify build from the console's environment variables, so the
+# server can read its secrets at runtime. Never commit it.
+.env.production
 dist/
 .next/
 build/
