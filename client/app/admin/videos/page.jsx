@@ -16,8 +16,20 @@ import VideoPreviewModal from '@/components/admin/VideoPreviewModal';
  *   4. poll until it's ready, then publish
  */
 
+/**
+ * `pending` covers two genuinely different situations — a video whose file was
+ * never uploaded, and one that was uploaded but never processed for streaming.
+ * `hasSourceFile` from the API separates them, so the badge stops calling an
+ * uploaded video empty.
+ */
+function statusOf(video) {
+  if (video.transcodeStatus === 'pending' && video.hasSourceFile) return 'unprocessed';
+  return video.transcodeStatus;
+}
+
 const STATUS_LABELS = {
   pending: 'No file uploaded',
+  unprocessed: 'Not processed for streaming',
   processing: 'Processing…',
   ready: 'Ready to play',
   failed: 'Processing failed',
@@ -25,6 +37,7 @@ const STATUS_LABELS = {
 
 const STATUS_STYLES = {
   pending: 'bg-gray-100 text-gray-500',
+  unprocessed: 'bg-amber-100 text-amber-700',
   processing: 'bg-blue-100 text-blue-700',
   ready: 'bg-green-100 text-green-700',
   failed: 'bg-red-100 text-red-700',
@@ -343,14 +356,20 @@ export default function AdminVideosPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="font-semibold truncate">{video.title}</h2>
                     <span
-                      className={`text-[10px] px-2 py-0.5 rounded ${
-                        STATUS_STYLES[video.transcodeStatus]
-                      }`}
+                      className={`text-[10px] px-2 py-0.5 rounded ${STATUS_STYLES[statusOf(video)]}`}
+                      title={
+                        statusOf(video) === 'unprocessed'
+                          ? 'The file is uploaded and you can play it here. Customers need it processed for streaming first.'
+                          : undefined
+                      }
                     >
-                      {STATUS_LABELS[video.transcodeStatus]}
+                      {STATUS_LABELS[statusOf(video)]}
                     </span>
                     {!video.isPublished && (
-                      <span className="text-[10px] uppercase bg-gray-100 text-gray-500 px-2 py-0.5 rounded">
+                      <span
+                        className="text-[10px] uppercase bg-gray-100 text-gray-500 px-2 py-0.5 rounded"
+                        title="Not visible to customers yet."
+                      >
                         Draft
                       </span>
                     )}
@@ -372,9 +391,11 @@ export default function AdminVideosPage() {
                     onClick={() => togglePublished(video)}
                     disabled={video.transcodeStatus !== 'ready' && !video.isPublished}
                     title={
-                      video.transcodeStatus !== 'ready'
-                        ? 'Wait until processing finishes'
-                        : undefined
+                      video.transcodeStatus === 'ready'
+                        ? undefined
+                        : statusOf(video) === 'unprocessed'
+                          ? 'This video has to be processed for streaming before customers can watch it.'
+                          : 'Wait until processing finishes'
                     }
                     className="text-xs px-3 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-40"
                   >
