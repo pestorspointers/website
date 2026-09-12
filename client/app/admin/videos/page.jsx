@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import ImageField from '@/components/admin/ImageField';
+import VideoPreviewModal from '@/components/admin/VideoPreviewModal';
 
 /**
  * The video library.
@@ -35,6 +36,7 @@ export default function AdminVideosPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);
+  const [previewing, setPreviewing] = useState(null);
   const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState({
@@ -335,18 +337,7 @@ export default function AdminVideosPage() {
               />
             ) : (
               <div key={video.id} className="bg-white border rounded-lg p-5 flex items-center gap-5">
-                {video.thumbnailUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={video.thumbnailUrl}
-                    alt=""
-                    className="w-24 h-16 object-cover rounded shrink-0"
-                  />
-                ) : (
-                  <div className="w-24 h-16 bg-gray-100 rounded shrink-0 flex items-center justify-center text-gray-300 text-2xl">
-                    ▶
-                  </div>
-                )}
+                <PlayButton video={video} onPlay={() => setPreviewing(video)} />
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -410,6 +401,10 @@ export default function AdminVideosPage() {
         </div>
       )}
 
+      {previewing && (
+        <VideoPreviewModal video={previewing} onClose={() => setPreviewing(null)} />
+      )}
+
       <p className="text-xs text-gray-400 mt-6">
         Course ordering is set on each{' '}
         <Link href="/admin/courses" className="underline">
@@ -418,6 +413,32 @@ export default function AdminVideosPage() {
         .
       </p>
     </div>
+  );
+}
+
+/**
+ * The thumbnail doubles as the play control. It stays clickable whatever the
+ * transcode status says, because an admin can fall back to the original
+ * upload; if there is genuinely no file, the modal says so.
+ */
+function PlayButton({ video, onPlay }) {
+  return (
+    <button
+      type="button"
+      onClick={onPlay}
+      title={`Play "${video.title}"`}
+      aria-label={`Play ${video.title}`}
+      className="group relative w-24 h-16 rounded shrink-0 overflow-hidden bg-gray-100"
+    >
+      {video.thumbnailUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={video.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+      ) : null}
+
+      <span className="absolute inset-0 flex items-center justify-center text-2xl text-white bg-black/30 group-hover:bg-black/50 transition-colors">
+        ▶
+      </span>
+    </button>
   );
 }
 

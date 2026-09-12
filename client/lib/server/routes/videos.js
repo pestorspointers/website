@@ -2,6 +2,8 @@ import { Router } from '../router.js';
 import {
   S3Client,
   PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
   DeleteObjectCommand,
   ListObjectsV2Command,
   DeleteObjectsCommand,
@@ -12,7 +14,7 @@ import { authenticate } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { camelize, pickSnake } from '../lib/case.js';
 import { badRequest, forbidden, notFound } from '../lib/http.js';
-import { canAccessVideo } from '../services/access.js';
+import { canAccessVideo, isAdmin } from '../services/access.js';
 import { signCloudFrontUrl } from '../services/cloudfront.js';
 import { submitTranscodeJob, getTranscodeJobStatus, hlsKeyFor } from '../services/mediaconvert.js';
 import { awsClientConfig } from '../lib/awsConfig.js';
@@ -28,6 +30,20 @@ function s3() {
     _s3 = new S3Client(awsClientConfig());
   }
   return _s3;
+}
+
+/** Where the untouched upload lives, before MediaConvert ever sees it. */
+function rawKeyFor(videoId) {
+  return `uploads/raw/${videoId}/original.mp4`;
+}
+
+async function objectExists(key) {
+  try {
+    await s3().send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function bucket() {
@@ -89,18 +105,40 @@ router.get('/:id/stream', authenticate, async (req, res) => {
     'load video'
   );
 
-  if (!video || !video.is_published) throw notFound('Video not found');
+  // Admins preview their own library, drafts included; everyone else only ever
+  // sees a published video exist at all.
+  if (!video || (!video.is_published && !isAdmin(req.user))) throw notFound('Video not found');
 
   if (!(await canAccessVideo(req.user, video))) {
     throw forbidden('You do not have access to this video');
   }
 
+  const expiresIn = 7200;
+
   if (!video.s3_key || video.transcode_status !== 'ready') {
+    // Nothing has been transcoded, but the original upload is still sitting in
+    // the bucket and plays on its own. Let an admin watch that directly so the
+    // library is reviewable without waiting on MediaConvert. Customers still
+    // get the streaming version or nothing — the source file is a single large
+    // object with no adaptive bitrate, which is fine for one admin and wrong
+    // for an audience.
+    if (isAdmin(req.user)) {
+      const rawKey = rawKeyFor(video.id);
+      if (await objectExists(rawKey)) {
+        const url = await getSignedUrl(
+          s3(),
+          new GetObjectCommand({ Bucket: bucket(), Key: rawKey }),
+          { expiresIn }
+        );
+        return res.json({ url, kind: 'source', expiresIn });
+      }
+      throw badRequest('No video file has been uploaded for this video yet.');
+    }
+
     throw badRequest('This video is still processing. Check back shortly.');
   }
 
-  const expiresIn = 7200;
-  res.json({ url: signCloudFrontUrl(video.s3_key, expiresIn), expiresIn });
+  res.json({ url: signCloudFrontUrl(video.s3_key, expiresIn), kind: 'hls', expiresIn });
 });
 
 // Lets the watch page decide what to render before it asks for a stream.
@@ -114,7 +152,7 @@ router.get('/:id/access', authenticate, async (req, res) => {
     'load video'
   );
 
-  if (!video || !video.is_published) throw notFound('Video not found');
+  if (!video || (!video.is_published && !isAdmin(req.user))) throw notFound('Video not found');
 
   res.json({
     ...camelize({ ...video, courses: undefined }),

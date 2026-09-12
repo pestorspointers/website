@@ -4,7 +4,12 @@ import { useEffect, useRef } from 'react';
 import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
 
-export default function VideoPlayer({ src, poster }) {
+/**
+ * `type` is the source's MIME type. It defaults to HLS because that is what
+ * finished, customer-facing videos are; an admin previewing an untranscoded
+ * upload passes `video/mp4` instead and video.js plays it natively.
+ */
+export default function VideoPlayer({ src, poster, type = 'application/x-mpegURL' }) {
   const videoRef = useRef(null);
   const playerRef = useRef(null);
 
@@ -22,7 +27,7 @@ export default function VideoPlayer({ src, poster }) {
       responsive: true,
       fluid: true,
       poster,
-      sources: [{ src, type: 'application/x-mpegURL' }],
+      sources: [{ src, type }],
     });
 
     playerRef.current = player;
@@ -33,7 +38,7 @@ export default function VideoPlayer({ src, poster }) {
         playerRef.current = null;
       }
     };
-  }, [src, poster]);
+  }, [src, poster, type]);
 
   return (
     <div

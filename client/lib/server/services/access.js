@@ -8,12 +8,18 @@ import { db, unwrap } from '../config/supabase.js';
  *   purchase video → only a user holding a video_entitlement for it
  *   course   video → a user holding a course_entitlement for its course,
  *                    OR a paying subscriber on a tier that unlocks that course
+ *   any      video → an admin, who needs to preview the library it owns
  *
  * The SQL functions `can_access_course` / `can_access_video` implement the same
  * rules for RLS. Keep the two in sync if you change one.
  */
 
 const PAYING_STATUSES = new Set(['active', 'trialing']);
+
+/** Admins can watch anything — it mirrors `is_admin()` in the RLS policies. */
+export function isAdmin(profile) {
+  return profile?.role === 'admin';
+}
 
 /** True when the user's subscription is currently in good standing. */
 export function isSubscriptionActive(profile) {
@@ -90,6 +96,7 @@ export async function getEntitlements(profile) {
 /** Can this user access everything inside `courseId`? */
 export async function canAccessCourse(profile, courseId) {
   if (!profile || !courseId) return false;
+  if (isAdmin(profile)) return true;
 
   const owned = unwrap(
     await db()
@@ -125,6 +132,7 @@ export async function canAccessVideo(profile, video) {
   if (!video) return false;
   if (video.access_type === 'public') return true;
   if (!profile) return false;
+  if (isAdmin(profile)) return true;
 
   if (video.access_type === 'purchase') {
     const owned = unwrap(
