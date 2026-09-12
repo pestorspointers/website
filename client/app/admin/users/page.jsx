@@ -19,6 +19,9 @@ export default function AdminUsersPage() {
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState(null);
   const [access, setAccess] = useState({});
+  const [invite, setInvite] = useState({ email: '', fullName: '', role: 'user' });
+  const [inviting, setInviting] = useState(false);
+  const [inviteNotice, setInviteNotice] = useState('');
 
   const load = useCallback(async (term = '') => {
     setLoading(true);
@@ -41,6 +44,26 @@ export default function AdminUsersPage() {
       .then(({ data }) => setCourses(data))
       .catch(() => {});
   }, [load]);
+
+  const sendInvite = async (e) => {
+    e.preventDefault();
+    setError('');
+    setInviteNotice('');
+    setInviting(true);
+
+    try {
+      await api.post('/api/v1/admin/users/invite', invite);
+      setInviteNotice(
+        `Invite sent to ${invite.email}. The link only works once, so tell them not to forward it.`
+      );
+      setInvite({ email: '', fullName: '', role: 'user' });
+      load(search);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setInviting(false);
+    }
+  };
 
   const changeRole = async (user, role) => {
     if (
@@ -103,6 +126,45 @@ export default function AdminUsersPage() {
       <p className="text-gray-500 mb-6">
         Everyone with an account, what they&apos;re paying for, and what they can watch.
       </p>
+
+      <form onSubmit={sendInvite} className="bg-white border rounded-lg p-4 mb-6">
+        <p className="text-sm font-semibold mb-3">Invite a new member</p>
+
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="email"
+            required
+            value={invite.email}
+            onChange={(e) => setInvite((v) => ({ ...v, email: e.target.value }))}
+            placeholder="their@email.com"
+            className="border rounded px-3 py-2 text-sm flex-1 min-w-[14rem]"
+          />
+          <input
+            type="text"
+            value={invite.fullName}
+            onChange={(e) => setInvite((v) => ({ ...v, fullName: e.target.value }))}
+            placeholder="Name (optional)"
+            className="border rounded px-3 py-2 text-sm flex-1 min-w-[10rem]"
+          />
+          <select
+            value={invite.role}
+            onChange={(e) => setInvite((v) => ({ ...v, role: e.target.value }))}
+            className="border rounded px-2 py-2 text-sm"
+          >
+            <option value="user">Member</option>
+            <option value="admin">Admin</option>
+          </select>
+          <button
+            type="submit"
+            disabled={inviting}
+            className="px-4 py-2 rounded bg-[#f53100] text-white text-sm font-semibold hover:bg-[#d42a00] disabled:opacity-50 transition-colors"
+          >
+            {inviting ? 'Sending…' : 'Send invite'}
+          </button>
+        </div>
+
+        {inviteNotice && <p className="mt-3 text-sm text-green-700">{inviteNotice}</p>}
+      </form>
 
       <form
         onSubmit={(e) => {

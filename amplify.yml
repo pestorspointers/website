@@ -1,5 +1,9 @@
 # AWS Amplify build settings.
 #
+# This builds the whole product. The site, the admin area and the API all live
+# in client/ — the API as Next route handlers under /api/v1 — so this one
+# application block is the entire deployment. There is no second service.
+#
 # The deployable app is client/, not the repo root. Amplify's native Next.js SSR
 # support keys off the app root's package.json, so the app root has to be
 # client/ — otherwise it finds no `next` dependency, skips the Next adapter, and

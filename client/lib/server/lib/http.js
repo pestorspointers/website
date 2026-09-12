@@ -11,6 +11,7 @@ export const unauthorized = (msg = 'Not authenticated') => new HttpError(401, ms
 export const forbidden = (msg = 'Access denied') => new HttpError(403, msg);
 export const notFound = (msg = 'Not found') => new HttpError(404, msg);
 export const conflict = (msg) => new HttpError(409, msg);
+export const tooManyRequests = (msg) => new HttpError(429, msg);
 export const unavailable = (msg) => new HttpError(503, msg);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

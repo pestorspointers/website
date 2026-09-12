@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
-import { db, unwrap } from '../config/supabase.js';
+import { db, supabaseUrl, unwrap } from '../config/supabase.js';
 import { camelize } from '../lib/case.js';
 import { unauthorized } from '../lib/http.js';
 
@@ -16,8 +16,8 @@ import { unauthorized } from '../lib/http.js';
 let _jwks;
 function jwks() {
   if (!_jwks) {
-    const url = process.env.SUPABASE_URL;
-    if (!url) throw new Error('SUPABASE_URL is not set');
+    const url = supabaseUrl();
+    if (!url) throw new Error('NEXT_PUBLIC_SUPABASE_URL is not set');
     _jwks = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`));
   }
   return _jwks;
@@ -33,7 +33,7 @@ function legacySecret() {
 }
 
 async function verifyToken(token) {
-  const issuer = `${process.env.SUPABASE_URL}/auth/v1`;
+  const issuer = `${supabaseUrl()}/auth/v1`;
   const options = { issuer, audience: 'authenticated' };
 
   const { alg } = decodeProtectedHeader(token);

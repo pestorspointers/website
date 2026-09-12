@@ -4,6 +4,8 @@ import {
   GetJobCommand,
 } from '@aws-sdk/client-mediaconvert';
 
+import { awsClientConfig } from '../lib/awsConfig.js';
+
 /**
  * Where the HLS master playlist lands for a given video. MediaConvert names
  * outputs after the input file, so `uploads/raw/<id>/original.mp4` becomes
@@ -15,14 +17,7 @@ function mediaConvertClient() {
   const endpoint = process.env.MEDIACONVERT_ENDPOINT;
   if (!endpoint) throw new Error('MEDIACONVERT_ENDPOINT is not configured');
 
-  return new MediaConvertClient({
-    endpoint,
-    region: process.env.AWS_REGION || 'us-east-1',
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-  });
+  return new MediaConvertClient({ endpoint, ...awsClientConfig() });
 }
 
 export async function submitTranscodeJob(videoId) {

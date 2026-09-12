@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../router.js';
 import { db, unwrap } from '../config/supabase.js';
 import { authenticate, invalidateProfile } from '../middleware/authenticate.js';
 import { camelize, pickSnake } from '../lib/case.js';

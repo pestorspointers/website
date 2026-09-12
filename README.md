@@ -4,7 +4,8 @@ A course-selling website with a built-in admin area, so the site owner can chang
 the pages, add courses and upload videos without touching code.
 
 - **Frontend** — Next.js 14 (App Router), Tailwind
-- **API** — Express, talking to Supabase with the service-role key
+- **API** — Next.js route handlers under `/api/v1`, talking to Supabase with
+  the service-role key
 - **Database + auth + image storage** — Supabase (Postgres, Auth, Storage)
 - **Payments** — Stripe (memberships + one-off course purchases)
 - **Course video** — private S3 bucket → MediaConvert (HLS) → CloudFront signed URLs
@@ -27,7 +28,7 @@ one course at a time.
 
 The rule lives in two places that must agree:
 
-- `server/src/services/access.js` — what the API enforces
+- `client/lib/server/services/access.js` — what the API enforces
 - `public.can_access_course()` / `public.can_access_video()` in the migration — what
   Row Level Security enforces
 
@@ -49,9 +50,29 @@ CloudFront requires the signature.
 3. In **Authentication → Providers**, make sure Email is enabled. Decide whether
    you want "Confirm email" on (recommended for a live site) — the sign-up page
    handles both.
-4. In **Authentication → URL Configuration**, add your site URL and
-   `http://localhost:3000/auth/callback` to the redirect allow-list.
-5. Grab your keys from **Project Settings → API**.
+4. In **Authentication → URL Configuration**, set the **Site URL** with *no*
+   trailing slash, and add `http://localhost:3000/**` plus your deployed
+   origin to the redirect allow-list.
+5. In **Authentication → Emails → Templates**, point the **Invite user**
+   template at the confirm route, which is what turns the emailed token into a
+   session:
+
+   ```html
+   <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/set-password">Accept your invite</a>
+   ```
+
+   Supabase's stock template uses `{{ .ConfirmationURL }}`, which returns the
+   tokens in the URL *fragment* — a server route can never read those, so
+   invitees land on the homepage signed out.
+6. Grab your keys from **Project Settings → API**.
+
+**Set up SMTP before inviting anyone.** Supabase's built-in mailer is for
+testing only: it allows a couple of emails an hour and will only deliver to
+addresses belonging to your Supabase organisation. Everything else fails as a
+`429` on `POST /auth/v1/invite`, which the dashboard reports as the unhelpful
+"Error sending invite email". Add a real provider (Resend, Postmark, SES,
+SendGrid) under **Project Settings → Authentication → SMTP Settings**, then
+raise the ceiling under **Authentication → Rate Limits**.
 
 **Make yourself an admin.** Before signing up, run this with your own email:
 
@@ -74,20 +95,24 @@ update public.profiles set role = 'admin' where email = 'you@example.com';
 Copy the examples and fill them in:
 
 ```bash
-cp server/.env.example server/.env
 cp client/.env.example client/.env.local
 ```
 
-The one to be careful with is `SUPABASE_SERVICE_ROLE_KEY` — it bypasses all
-security rules. It belongs in `server/.env` only, never in the client.
+Everything lives in that one file now, because the site and the API are one
+app. The variable to be careful with is `SUPABASE_SECRET_KEY` — it bypasses all
+security rules. It has no `NEXT_PUBLIC_` prefix, which is what keeps it on the
+server; never add one.
+
+(`server/.env` still exists for the one-off AWS scripts in `server/scripts/`.
+Nothing serves traffic from there.)
 
 ### 3. Stripe
 
-1. Add `STRIPE_SECRET_KEY` to `server/.env`.
+1. Add `STRIPE_SECRET_KEY` to `client/.env.local`.
 2. Forward webhooks while developing, and copy the signing secret it prints into
    `STRIPE_WEBHOOK_SECRET`:
    ```bash
-   stripe listen --forward-to localhost:5001/api/v1/webhooks/stripe
+   stripe listen --forward-to localhost:3000/api/v1/webhooks/stripe
    ```
 3. Turn on the Customer Portal: **Stripe Dashboard → Settings → Billing →
    Customer Portal**.
@@ -124,7 +149,7 @@ npm run dev
 
 - Site — http://localhost:3000
 - Admin — http://localhost:3000/admin
-- API — http://localhost:5001
+- API — http://localhost:3000/api/v1 (same server; `/api/v1/health` answers)
 
 ---
 
@@ -204,12 +229,17 @@ client/                         Next.js app
     blocks.js                   block catalogue — drives builder AND renderer
     supabase/                   browser + server Supabase clients
     api.js                      browser API client (attaches the access token)
-    serverApi.js                server-side API fetch helpers
 
-server/src/
-  middleware/authenticate.js    verifies Supabase JWTs, loads the profile
-  services/access.js            all entitlement logic
-  routes/                       the API
+    serverApi.js                calls the API from server components
+    server/                     the API itself
+      app.js                    route table — what is mounted where
+      router.js                 the small Express-compatible router
+      middleware/authenticate.js  verifies Supabase JWTs, loads the profile
+      services/access.js        all entitlement logic
+      routes/                   the API's routes
+  app/api/v1/[...path]/         the one handler every API request enters
+
+server/scripts/                 one-off AWS setup and video-import tools
 
 supabase/
   migrations/0001_init.sql      schema, functions, RLS, storage bucket
@@ -229,16 +259,25 @@ No API or database change is needed — block content is JSON.
 
 ## Deploying
 
-**Frontend — AWS Amplify.** Root directory `client/`, build `npm run build`. Add
-every variable from `client/.env.local`, with `NEXT_PUBLIC_SITE_URL` set to the
-real domain.
+**Everything — AWS Amplify.** One app, one deploy. Root directory `client/`,
+build `npm run build`. Add every variable from `client/.env.local`, with
+`NEXT_PUBLIC_SITE_URL` set to the real domain. The API is served by the same
+app at `/api/v1`, so there is no second service and no API host to configure.
 
-**API — Railway.** Root directory `server/`. Add every variable from
-`server/.env`, with `CLIENT_URL` set to the deployed frontend origin (comma-
-separate if there's more than one).
+The AWS credentials are named `APP_AWS_REGION`, `APP_AWS_ACCESS_KEY_ID` and
+`APP_AWS_SECRET_ACCESS_KEY` for two reasons: Amplify refuses to create any
+variable beginning with `AWS`, and the Lambda runtime behind Amplify's compute
+already sets `AWS_REGION` to its own region. Reading that would have sent every
+S3 call to the wrong region. If you would rather not put long-lived keys in the
+console at all, grant the Amplify compute role S3 and MediaConvert access and
+leave both key variables unset — the SDK will use the role. `APP_AWS_REGION` is
+required either way, and the app fails loudly if it is missing.
+
+`/api/v1/health` returns `{"status":"ok"}` on a healthy deploy, and is the
+quickest way to tell a broken build from a broken environment variable.
 
 **Stripe.** Add a webhook endpoint pointing at
-`https://your-api-domain/api/v1/webhooks/stripe` and copy its signing secret into
+`https://yourdomain.com/api/v1/webhooks/stripe` and copy its signing secret into
 `STRIPE_WEBHOOK_SECRET`. Subscribe it to: `checkout.session.completed`,
 `customer.subscription.*`, `invoice.payment_succeeded`, `invoice.payment_failed`.
 
@@ -249,9 +288,15 @@ the S3 bucket's CORS origins.
 
 ## Notes on a few decisions
 
-- **Express stays in front of Supabase.** Business logic that must not be
+- **An API stays in front of Supabase.** Business logic that must not be
   client-editable (Stripe checkout, entitlement grants, signed video URLs) lives
-  server-side, and a future mobile app can reuse the same API.
+  server-side, and a future mobile app can reuse the same routes.
+- **It runs inside Next, not as its own service.** It was a standalone Express
+  app, which meant the admin panel went dark on Amplify because only `client/`
+  was ever deployed. The routes now run as Next route handlers on the same
+  origin, so there is nothing to deploy separately and nothing to point at.
+  `client/lib/server/router.js` is a small stand-in for `express.Router`, which
+  is why the route files still read like Express.
 - **RLS is on for every table anyway.** The API uses the service-role key and
   bypasses it, but the policies mean the browser's anon key is safe to expose:
   it can read published content and a user's own rows, nothing more.
@@ -259,5 +304,9 @@ the S3 bucket's CORS origins.
   access checks are indexable joins.
 - **Roles are read from `profiles`, not the JWT**, so a demotion takes effect
   within 30 seconds instead of whenever the token expires.
-- **The webhook route is mounted before `express.json()`** — Stripe signature
-  verification needs the raw body. Don't reorder it in `index.js`.
+- **The Stripe webhook body is never parsed** — signature verification needs
+  the exact bytes. `app/api/v1/[...path]/route.js` checks for the webhook path
+  before touching the body. Don't reorder that.
+- **Nothing rate-limits the API in the app.** The Express version counted
+  requests in one process's memory, which means nothing on Amplify's compute.
+  Put a rate limit in CloudFront or WAF if you want one.

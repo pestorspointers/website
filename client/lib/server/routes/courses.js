@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../router.js';
 import { db, unwrap } from '../config/supabase.js';
 import { authenticate, optionalAuth } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
@@ -6,6 +6,7 @@ import { camelize, pickSnake } from '../lib/case.js';
 import { assertUuids, badRequest, conflict, notFound, slugify, unavailable } from '../lib/http.js';
 import { canAccessCourse, getEntitlements } from '../services/access.js';
 import getStripe, { stripeEnabled } from '../services/stripe.js';
+import { siteUrl } from '../lib/siteUrl.js';
 
 const router = Router();
 
@@ -171,8 +172,8 @@ router.post('/:id/checkout', authenticate, async (req, res) => {
     customer: customerId,
     line_items: [{ price: priceId, quantity: 1 }],
     mode: 'payment',
-    success_url: `${process.env.CLIENT_URL}/courses/${course.slug}?purchased=1`,
-    cancel_url: `${process.env.CLIENT_URL}/courses/${course.slug}`,
+    success_url: `${siteUrl()}/courses/${course.slug}?purchased=1`,
+    cancel_url: `${siteUrl()}/courses/${course.slug}`,
     metadata: {
       userId: req.user.id,
       type: 'course',

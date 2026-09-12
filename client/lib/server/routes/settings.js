@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../router.js';
 import { db, unwrap } from '../config/supabase.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';

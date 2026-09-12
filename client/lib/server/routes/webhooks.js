@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../router.js';
 import { db, unwrap } from '../config/supabase.js';
 import { isUuid } from '../lib/http.js';
 import { invalidateProfile } from '../middleware/authenticate.js';

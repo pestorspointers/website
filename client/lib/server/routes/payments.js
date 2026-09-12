@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../router.js';
 import { db, unwrap } from '../config/supabase.js';
 import { authenticate } from '../middleware/authenticate.js';
 import { camelize } from '../lib/case.js';
@@ -7,6 +7,7 @@ import { getEntitlements } from '../services/access.js';
 import { ensureStripeCustomer } from './courses.js';
 import getStripe, { stripeEnabled } from '../services/stripe.js';
 import { syncTierToStripe } from '../services/tierStripe.js';
+import { siteUrl } from '../lib/siteUrl.js';
 
 const router = Router();
 
@@ -70,8 +71,8 @@ router.post('/create-checkout-session', async (req, res) => {
     customer: customerId,
     line_items: [{ price: priceId, quantity: 1 }],
     mode: 'subscription',
-    success_url: `${process.env.CLIENT_URL}/dashboard?subscribed=1`,
-    cancel_url: `${process.env.CLIENT_URL}/billing`,
+    success_url: `${siteUrl()}/dashboard?subscribed=1`,
+    cancel_url: `${siteUrl()}/billing`,
     metadata: { userId: req.user.id, type: 'subscription', tierId: tier.id },
     subscription_data: {
       metadata: { userId: req.user.id, tierId: tier.id },
@@ -88,7 +89,7 @@ router.post('/create-portal-session', async (req, res) => {
 
   const session = await getStripe().billingPortal.sessions.create({
     customer: req.user.stripeCustomerId,
-    return_url: `${process.env.CLIENT_URL}/dashboard`,
+    return_url: `${siteUrl()}/dashboard`,
   });
 
   res.json({ url: session.url });

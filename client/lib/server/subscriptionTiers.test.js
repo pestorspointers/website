@@ -6,7 +6,7 @@
  * Supabase, Stripe and the auth middleware are swapped for in-memory fakes so
  * the real route logic runs end to end without touching the live project.
  */
-import { after, beforeEach, mock, test } from 'node:test';
+import { beforeEach, mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const here = (path) => new URL(path, import.meta.url).href;
@@ -142,7 +142,7 @@ const callsTo = (name) => stripe.calls.filter((c) => c.call === name);
 
 let currentUser;
 
-mock.module(here('../src/config/supabase.js'), {
+mock.module(here('./config/supabase.js'), {
   exports: {
     db: () => ({ from }),
     unwrap: ({ data, error }, context = 'query') => {
@@ -151,7 +151,7 @@ mock.module(here('../src/config/supabase.js'), {
     },
   },
 });
-mock.module(here('../src/middleware/authenticate.js'), {
+mock.module(here('./middleware/authenticate.js'), {
   exports: {
     authenticate: (req, _res, next) => {
       req.user = currentUser;
@@ -159,32 +159,27 @@ mock.module(here('../src/middleware/authenticate.js'), {
     },
   },
 });
-mock.module(here('../src/services/stripe.js'), {
+mock.module(here('./services/stripe.js'), {
   exports: { default: () => fakeStripe, stripeEnabled: () => stripe.on },
 });
 
-await import('express-async-errors');
-const { default: express } = await import('express');
-const { default: tierRoutes } = await import('../src/routes/subscriptionTiers.js');
+const { Router } = await import('./router.js');
+const { runRequest } = await import('./runRequest.js');
+const { default: tierRoutes } = await import('./routes/subscriptionTiers.js');
 
-const app = express();
-app.use(express.json());
+// The routes run through the same router and request runner that serve real
+// traffic, so this exercises the dispatch path as well as the route logic.
+const app = Router();
 app.use('/tiers', tierRoutes);
-app.use((err, _req, res, _next) => res.status(err.status ?? 500).json({ error: err.message }));
-
-const server = await new Promise((resolve) => {
-  const s = app.listen(0, '127.0.0.1', () => resolve(s));
-});
-after(() => server.close());
-const base = `http://127.0.0.1:${server.address().port}/tiers`;
 
 async function call(method, path = '', body) {
-  const res = await fetch(`${base}${path}`, {
+  const [pathname, search = ''] = `/tiers${path}`.split('?');
+  return runRequest(app, {
     method,
-    headers: { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    path: pathname,
+    query: Object.fromEntries(new URLSearchParams(search)),
+    body: body ?? {},
   });
-  return { status: res.status, body: await res.json() };
 }
 
 const createPlan = (overrides = {}) =>

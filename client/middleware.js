@@ -65,9 +65,14 @@ export async function middleware(request) {
 export const config = {
   matcher: [
     /*
-     * Everything except static assets and image files — the session cookie has
-     * to be refreshed on normal page requests, not on every .png.
+     * Everything except static assets, image files and the API — the session
+     * cookie has to be refreshed on normal page requests, not on every .png.
+     *
+     * `/api` is excluded deliberately. Every API route reads the bearer token
+     * itself, so running the session refresh here would add a Supabase round
+     * trip to every call for nothing, and it must never touch the Stripe
+     * webhook, which is not a browser request at all.
      */
-    '/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico)$).*)',
+    '/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico)$).*)',
   ],
 };

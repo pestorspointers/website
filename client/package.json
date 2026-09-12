@@ -6,14 +6,20 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --experimental-test-module-mocks --test lib/server/*.test.js"
   },
   "dependencies": {
+    "@aws-sdk/client-mediaconvert": "^3.1131.0",
+    "@aws-sdk/client-s3": "^3.1131.0",
+    "@aws-sdk/cloudfront-signer": "^3.1125.0",
+    "@aws-sdk/s3-request-presigner": "^3.1131.0",
     "@monaco-editor/react": "^4.7.0",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.111.0",
     "@videojs/http-streaming": "^3.17.4",
     "axios": "^1.6.2",
+    "jose": "^5.10.0",
     "next": "14.2.0",
     "next-mdx-remote": "^6.0.0",
     "react": "^18",
@@ -23,6 +29,7 @@
     "remark-parse": "^11.0.0",
     "remark-rehype": "^11.1.2",
     "shiki": "^4.0.2",
+    "stripe": "^14.25.0",
     "unified": "^11.0.5",
     "video.js": "^8.23.7"
   },

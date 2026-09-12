@@ -1,9 +1,10 @@
-import { Router } from 'express';
+import { Router } from '../router.js';
 import { db, unwrap } from '../config/supabase.js';
 import { authenticate, invalidateProfile } from '../middleware/authenticate.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { camelize } from '../lib/case.js';
-import { badRequest, notFound } from '../lib/http.js';
+import { badRequest, conflict, notFound, tooManyRequests } from '../lib/http.js';
+import { siteUrl } from '../lib/siteUrl.js';
 
 const router = Router();
 router.use(authenticate, requireAdmin);
@@ -68,6 +69,55 @@ router.get('/users', async (req, res) => {
       subscriptionTiers: undefined,
     }))
   );
+});
+
+// Invite someone who has no account yet. Supabase mails the one-time link;
+// the client's /auth/confirm route turns it into a session and sends them to
+// /set-password. `redirectTo` has to be on the Auth > URL Configuration allow
+// list or Supabase refuses the invite.
+router.post('/users/invite', async (req, res) => {
+  const email = String(req.body.email ?? '').trim().toLowerCase();
+  const fullName = String(req.body.fullName ?? '').trim();
+  const role = req.body.role ?? 'user';
+
+  if (!email.includes('@')) throw badRequest('A valid email is required');
+  if (!['user', 'admin'].includes(role)) throw badRequest('Invalid role');
+
+  const existing = unwrap(
+    await db().from('profiles').select('id').eq('email', email).maybeSingle(),
+    'find user'
+  );
+  if (existing) throw conflict('Someone already has an account with that email');
+
+  const { data, error } = await db().auth.admin.inviteUserByEmail(email, {
+    redirectTo: `${siteUrl()}/auth/confirm?next=/set-password`,
+    data: fullName ? { full_name: fullName } : undefined,
+  });
+
+  if (error) {
+    // Supabase's built-in mailer allows only a couple of emails an hour, and
+    // will only deliver to addresses on your Supabase org. Both show up here as
+    // a 429 with a message that does not explain either.
+    if (error.status === 429) {
+      throw tooManyRequests(
+        'Supabase is rate-limiting invite emails. Configure custom SMTP under ' +
+          'Project Settings > Authentication, or wait an hour and try again.'
+      );
+    }
+    throw badRequest(error.message);
+  }
+
+  // The on_auth_user_created trigger has already made the profile row; promote
+  // it if this invite was for an admin.
+  if (role === 'admin') {
+    unwrap(
+      await db().from('profiles').update({ role }).eq('id', data.user.id),
+      'set invited role'
+    );
+    invalidateProfile(data.user.id);
+  }
+
+  res.status(201).json({ id: data.user.id, email: data.user.email, role });
 });
 
 router.patch('/users/:id/role', async (req, res) => {

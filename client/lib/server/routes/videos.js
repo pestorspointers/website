@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../router.js';
 import {
   S3Client,
   PutObjectCommand,
@@ -15,6 +15,7 @@ import { badRequest, forbidden, notFound } from '../lib/http.js';
 import { canAccessVideo } from '../services/access.js';
 import { signCloudFrontUrl } from '../services/cloudfront.js';
 import { submitTranscodeJob, getTranscodeJobStatus, hlsKeyFor } from '../services/mediaconvert.js';
+import { awsClientConfig } from '../lib/awsConfig.js';
 
 const router = Router();
 
@@ -24,13 +25,7 @@ const VIDEO_COLUMNS =
 let _s3;
 function s3() {
   if (!_s3) {
-    _s3 = new S3Client({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      },
-    });
+    _s3 = new S3Client(awsClientConfig());
   }
   return _s3;
 }

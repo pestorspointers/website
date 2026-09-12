@@ -4,13 +4,15 @@ import axios from 'axios';
 import { createClient } from './supabase/client';
 
 /**
- * Browser-side client for the Express API. The interceptor attaches the
- * current Supabase access token to every request, so components never have to
- * think about auth headers.
+ * Browser-side client for the API. The interceptor attaches the current
+ * Supabase access token to every request, so components never have to think
+ * about auth headers.
+ *
+ * No `baseURL`: the API is served by this same Next app under `/api/v1`, so
+ * relative URLs are correct in development and in production alike. That is
+ * what `NEXT_PUBLIC_API_URL` used to point at, and it is no longer needed.
  */
-const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
-});
+const api = axios.create();
 
 api.interceptors.request.use(async (config) => {
   const {

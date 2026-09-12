@@ -1,28 +1,22 @@
 {
-  "name": "lifecoach-server",
+  "name": "lifecoach-aws-scripts",
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "description": "One-off AWS setup and video-import scripts. The API itself lives in client/lib/server and runs inside the Next app.",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
-    "test": "node --experimental-test-module-mocks --test"
+    "aws:setup": "node scripts/aws-setup.js",
+    "aws:status": "node scripts/aws-status.js",
+    "videos:import": "node scripts/import-videos.js",
+    "videos:link": "node scripts/link-videos.js",
+    "s3:inspect": "node scripts/inspect-s3.js"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudfront": "^3.1109.0",
+    "@aws-sdk/client-iam": "^3.1109.0",
     "@aws-sdk/client-mediaconvert": "^3.1019.0",
     "@aws-sdk/client-s3": "^3.1019.0",
-    "@aws-sdk/cloudfront-signer": "^3.1012.0",
     "@aws-sdk/lib-storage": "^3.1108.0",
-    "@aws-sdk/s3-request-presigner": "^3.1019.0",
-    "@supabase/supabase-js": "^2.47.10",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "express": "^4.18.2",
-    "express-async-errors": "^3.1.1",
-    "express-rate-limit": "^7.1.5",
-    "helmet": "^7.1.0",
-    "jose": "^5.9.6",
-    "pg": "^8.23.0",
-    "stripe": "^14.25.0"
+    "dotenv": "^16.3.1"
   }
 }

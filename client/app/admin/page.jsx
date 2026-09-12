@@ -52,8 +52,9 @@ export default async function AdminDashboard() {
       ) : (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-5 mb-10">
           <p className="text-sm text-amber-800">
-            Could not reach the API. Check that the server is running and that{' '}
-            <code className="bg-amber-100 px-1 rounded">API_URL</code> points at it.
+            Could not load the figures. The rest of the admin still works — open{' '}
+            <code className="bg-amber-100 px-1 rounded">/api/v1/health</code> to
+            check the API, and the server logs for the reason.
           </p>
         </div>
       )}

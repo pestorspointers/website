@@ -10,6 +10,12 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const next = searchParams.get('next') || '/dashboard';
 
+  // /auth/callback and /auth/confirm bounce dead links back here.
+  const linkError =
+    searchParams.get('error') === 'link-expired'
+      ? 'That link has expired or had already been used. Request a new one below.'
+      : '';
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -44,7 +50,9 @@ function LoginForm() {
     <div className="bg-white p-8 rounded-lg shadow-sm border">
       <h1 className="text-2xl font-bold mb-6">Sign In</h1>
 
-      {error && <p className="text-red-600 text-sm mb-4 p-3 bg-red-50 rounded">{error}</p>}
+      {(error || linkError) && (
+        <p className="text-red-600 text-sm mb-4 p-3 bg-red-50 rounded">{error || linkError}</p>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
