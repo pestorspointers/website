@@ -15,6 +15,7 @@ import { requireAdmin } from '../middleware/requireAdmin.js';
 import { camelize, pickSnake } from '../lib/case.js';
 import { badRequest, forbidden, notFound } from '../lib/http.js';
 import { canAccessVideo, isAdmin } from '../services/access.js';
+import { uploadedSourceIds } from '../services/sources.js';
 import { signCloudFrontUrl } from '../services/cloudfront.js';
 import { submitTranscodeJob, getTranscodeJobStatus, hlsKeyFor } from '../services/mediaconvert.js';
 import { awsClientConfig } from '../lib/awsConfig.js';
@@ -35,47 +36,6 @@ function s3() {
 /** Where the untouched upload lives, before MediaConvert ever sees it. */
 function rawKeyFor(videoId) {
   return `uploads/raw/${videoId}/original.mp4`;
-}
-
-/**
- * The ids of every video with an original upload sitting in the bucket.
- *
- * One listing answers this for the whole library, which is what lets the admin
- * list tell "nothing was ever uploaded" apart from "uploaded but never
- * transcoded" without a HeadObject per row. Cached briefly because the answer
- * only changes when someone uploads, and the page reloads far more often.
- */
-const SOURCE_INDEX_TTL_MS = 60_000;
-let sourceIndex = { ids: null, expires: 0 };
-
-async function uploadedSourceIds() {
-  if (sourceIndex.ids && sourceIndex.expires > Date.now()) return sourceIndex.ids;
-
-  const ids = new Set();
-  try {
-    let token;
-    do {
-      const listed = await s3().send(
-        new ListObjectsV2Command({
-          Bucket: bucket(),
-          Prefix: 'uploads/raw/',
-          ContinuationToken: token,
-        })
-      );
-      for (const object of listed.Contents ?? []) {
-        const id = object.Key.split('/')[2];
-        if (id && (object.Size ?? 0) > 0) ids.add(id);
-      }
-      token = listed.IsTruncated ? listed.NextContinuationToken : undefined;
-    } while (token);
-  } catch {
-    // S3 unreachable or unconfigured. Returning what we have degrades the badge
-    // to its old guess rather than breaking the whole admin page.
-    return sourceIndex.ids ?? new Set();
-  }
-
-  sourceIndex = { ids, expires: Date.now() + SOURCE_INDEX_TTL_MS };
-  return ids;
 }
 
 async function objectExists(key) {

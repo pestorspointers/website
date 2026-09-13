@@ -5,6 +5,7 @@ import { requireAdmin } from '../middleware/requireAdmin.js';
 import { camelize, pickSnake } from '../lib/case.js';
 import { assertUuids, badRequest, conflict, notFound, slugify, unavailable } from '../lib/http.js';
 import { canAccessCourse, getEntitlements } from '../services/access.js';
+import { withSourceFlag } from '../services/sources.js';
 import getStripe, { stripeEnabled } from '../services/stripe.js';
 import { siteUrl } from '../lib/siteUrl.js';
 
@@ -73,7 +74,7 @@ router.get('/admin/:id', authenticate, requireAdmin, async (req, res) => {
   if (!row) throw notFound('Course not found');
 
   const course = camelize(row);
-  course.videos = camelize([...(row.videos ?? [])].sort(byPosition));
+  course.videos = await withSourceFlag(camelize([...(row.videos ?? [])].sort(byPosition)));
 
   const tiers = unwrap(
     await db().from('tier_courses').select('tier_id').eq('course_id', req.params.id),

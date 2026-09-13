@@ -11,6 +11,18 @@ import ImageField from '@/components/admin/ImageField';
  * order here is the order members watch in, and a video only unlocks for
  * someone who owns *this* course.
  */
+
+/**
+ * Says what a video's transcode state means rather than echoing the raw value.
+ * `pending` in particular reads as "nothing here" when it usually means the
+ * file is uploaded but has never been converted for streaming.
+ */
+function playbackLabel(video) {
+  if (video.transcodeStatus === 'ready') return 'Ready to play';
+  if (video.transcodeStatus === 'processing') return 'Processing…';
+  if (video.transcodeStatus === 'failed') return 'Processing failed';
+  return video.hasSourceFile ? 'Not processed for streaming' : 'No file uploaded';
+}
 export default function AdminCourseEditPage() {
   const { id } = useParams();
   const router = useRouter();
@@ -41,8 +53,11 @@ export default function AdminCourseEditPage() {
         setVideos(courseData.videos ?? []);
         setTierIds(courseData.tierIds ?? []);
         setTiers(tierData);
-        // Anything not already in a course is fair game to add to this one.
-        setAvailable(videoData.filter((v) => !v.courseId));
+        // Everything except what this course already holds. A video belongs to
+        // one course at a time, so the ones spoken for are offered as a move
+        // rather than hidden — hiding them left this list empty once every
+        // video had been filed somewhere, with no way to tell why.
+        setAvailable(videoData.filter((v) => v.courseId !== id));
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -92,8 +107,21 @@ export default function AdminCourseEditPage() {
   const addVideo = (videoId) => {
     const video = available.find((v) => v.id === videoId);
     if (!video) return;
+
+    // Moving it out of another course is a real change to that course, so say
+    // so before doing it.
+    if (
+      video.courseId &&
+      !confirm(
+        `"${video.title}" is currently in "${video.courseTitle ?? 'another course'}".\n\n` +
+          'Move it to this course? It will be removed from the other one.'
+      )
+    ) {
+      return;
+    }
+
     setAvailable((prev) => prev.filter((v) => v.id !== videoId));
-    saveVideoOrder([...videos, video]);
+    saveVideoOrder([...videos, { ...video, courseId: id }]);
   };
 
   const removeVideo = (video) => {
@@ -136,6 +164,9 @@ export default function AdminCourseEditPage() {
 
   if (loading) return <p className="text-gray-400">Loading…</p>;
   if (!course) return <p className="text-red-600">{error || 'Course not found.'}</p>;
+
+  const unassigned = available.filter((v) => !v.courseId);
+  const elsewhere = available.filter((v) => v.courseId);
 
   return (
     <div>
@@ -279,8 +310,7 @@ export default function AdminCourseEditPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{video.title}</p>
                     <p className="text-xs text-gray-400">
-                      {video.isPublished ? 'Published' : 'Draft'} ·{' '}
-                      {video.transcodeStatus === 'ready' ? 'Ready to play' : video.transcodeStatus}
+                      {video.isPublished ? 'Published' : 'Draft'} · {playbackLabel(video)}
                       {/* A public video inside a paid course plays for
                           everyone — surfaced here so it's never a surprise. */}
                       {video.accessType === 'public' && (
@@ -334,15 +364,33 @@ export default function AdminCourseEditPage() {
               className="w-full border rounded px-3 py-2 text-sm"
             >
               <option value="">Add a video from your library…</option>
-              {available.map((video) => (
-                <option key={video.id} value={video.id}>
-                  {video.title}
-                </option>
-              ))}
+
+              {unassigned.length > 0 && (
+                <optgroup label="Not in any course">
+                  {unassigned.map((video) => (
+                    <option key={video.id} value={video.id}>
+                      {video.title}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+
+              {elsewhere.length > 0 && (
+                <optgroup label="In another course — picking one moves it here">
+                  {elsewhere.map((video) => (
+                    <option key={video.id} value={video.id}>
+                      {video.title} — {video.courseTitle ?? 'another course'}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
 
             <p className="text-xs text-gray-400 mt-2">
-              Only videos not already attached to another course appear here.{' '}
+              {available.length === 0
+                ? 'Every video in your library is already in this course.'
+                : 'A video lives in one course at a time. Choosing one that is already ' +
+                  'filed somewhere moves it here.'}{' '}
               <Link href="/admin/videos" className="underline">
                 Upload a new one
               </Link>
