@@ -35,6 +35,9 @@ const STATUS_LABELS = {
   failed: 'Processing failed',
 };
 
+/** How many in-flight transcodes to ask about per polling tick. */
+const POLL_BATCH = 12;
+
 const STATUS_STYLES = {
   pending: 'bg-gray-100 text-gray-500',
   unprocessed: 'bg-amber-100 text-amber-700',
@@ -50,6 +53,7 @@ export default function AdminVideosPage() {
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);
   const [previewing, setPreviewing] = useState(null);
+  const [bulk, setBulk] = useState(null);
   const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState({
@@ -74,28 +78,55 @@ export default function AdminVideosPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Keep an eye on anything mid-transcode so the badge flips on its own.
+  // Keep an eye on anything mid-transcode so the badges flip on their own.
+  //
+  // Each check is one MediaConvert lookup, so asking about every job on every
+  // tick would mean hundreds of calls a minute once a bulk run is under way.
+  // Instead a fixed-size window walks through the processing videos, wrapping
+  // around: a full sweep takes a few minutes, which is the timescale these
+  // jobs finish on anyway.
+  const videosRef = useRef(videos);
+  videosRef.current = videos;
+  const pollCursor = useRef(0);
+  const anyProcessing = videos.some((v) => v.transcodeStatus === 'processing');
+
   useEffect(() => {
-    const processing = videos.filter((v) => v.transcodeStatus === 'processing');
-    if (!processing.length) return;
+    if (!anyProcessing) return;
 
     const timer = setInterval(async () => {
-      for (const video of processing) {
-        try {
-          const { data } = await api.get(`/api/v1/videos/${video.id}/transcode-status`);
-          if (data.status !== video.transcodeStatus) {
-            setVideos((prev) =>
-              prev.map((v) => (v.id === video.id ? { ...v, transcodeStatus: data.status } : v))
-            );
+      const processing = videosRef.current.filter((v) => v.transcodeStatus === 'processing');
+      if (!processing.length) return;
+
+      const start = pollCursor.current % processing.length;
+      const batch = Array.from({ length: Math.min(POLL_BATCH, processing.length) }, (_, i) =>
+        processing[(start + i) % processing.length]
+      );
+      pollCursor.current = start + batch.length;
+
+      const results = await Promise.all(
+        batch.map(async (video) => {
+          try {
+            const { data } = await api.get(`/api/v1/videos/${video.id}/transcode-status`);
+            return { id: video.id, status: data.status };
+          } catch {
+            // Transient failures are fine — the next sweep tries again.
+            return null;
           }
-        } catch {
-          // Transient failures are fine — we'll try again on the next tick.
-        }
+        })
+      );
+
+      const changed = new Map(
+        results.filter((r) => r && r.status !== 'processing').map((r) => [r.id, r.status])
+      );
+      if (changed.size) {
+        setVideos((prev) =>
+          prev.map((v) => (changed.has(v.id) ? { ...v, transcodeStatus: changed.get(v.id) } : v))
+        );
       }
     }, 15000);
 
     return () => clearInterval(timer);
-  }, [videos]);
+  }, [anyProcessing]);
 
   const resetForm = () => {
     setForm({ title: '', description: '', accessType: 'course', courseId: '', price: '' });
@@ -186,6 +217,87 @@ export default function AdminVideosPage() {
     }
   };
 
+  /** Hand one video to MediaConvert. Returns true when a job was accepted. */
+  const process = async (video) => {
+    try {
+      const { data } = await api.post(`/api/v1/videos/${video.id}/transcode`);
+      setVideos((prev) => prev.map((v) => (v.id === video.id ? { ...v, ...data } : v)));
+      return true;
+    } catch (err) {
+      setError(`${video.title}: ${err.message}`);
+      return false;
+    }
+  };
+
+  /**
+   * Process everything that has a file but no streaming version.
+   *
+   * Two at a time, deliberately: MediaConvert throttles job creation, and the
+   * jobs queue on their own once submitted, so there is nothing to gain by
+   * pushing harder and a throttling error to lose. Several hundred videos take
+   * a few minutes to submit.
+   */
+  const processAll = async () => {
+    const queue = videos.filter(
+      (v) => v.hasSourceFile && v.transcodeStatus !== 'ready' && v.transcodeStatus !== 'processing'
+    );
+    if (!queue.length) return;
+
+    if (
+      !confirm(
+        `Process ${queue.length} videos for streaming?\n\n` +
+          'This runs a paid AWS MediaConvert job for each one and cannot be ' +
+          'cancelled once started. Videos become publishable as they finish, ' +
+          'which takes a few minutes each.'
+      )
+    ) {
+      return;
+    }
+
+    setError('');
+    setBulk({ done: 0, total: queue.length, failed: 0 });
+
+    let cursor = 0;
+    let failed = 0;
+
+    const worker = async () => {
+      while (cursor < queue.length) {
+        const video = queue[cursor++];
+        const ok = await process(video);
+        if (!ok) failed += 1;
+        setBulk({ done: Math.min(cursor, queue.length), total: queue.length, failed });
+      }
+    };
+
+    await Promise.all(Array.from({ length: 2 }, worker));
+    setBulk(null);
+  };
+
+  /** Publish every video that has a streaming version and isn't live yet. */
+  const publishAllReady = async () => {
+    const queue = videos.filter((v) => v.transcodeStatus === 'ready' && !v.isPublished);
+    if (!queue.length) return;
+    if (!confirm(`Publish ${queue.length} videos? They become visible to customers.`)) return;
+
+    setError('');
+    setBulk({ done: 0, total: queue.length, failed: 0, verb: 'Publishing' });
+
+    let done = 0;
+    for (const video of queue) {
+      try {
+        await api.patch(`/api/v1/videos/${video.id}`, { isPublished: true });
+        setVideos((prev) =>
+          prev.map((v) => (v.id === video.id ? { ...v, isPublished: true } : v))
+        );
+      } catch (err) {
+        setError(`${video.title}: ${err.message}`);
+      }
+      done += 1;
+      setBulk({ done, total: queue.length, failed: 0, verb: 'Publishing' });
+    }
+    setBulk(null);
+  };
+
   const remove = async (video) => {
     if (!confirm(`Delete "${video.title}"? The video file is deleted too.`)) return;
     try {
@@ -196,6 +308,14 @@ export default function AdminVideosPage() {
     }
   };
 
+  const unprocessedCount = videos.filter(
+    (v) => v.hasSourceFile && v.transcodeStatus !== 'ready' && v.transcodeStatus !== 'processing'
+  ).length;
+  const processingCount = videos.filter((v) => v.transcodeStatus === 'processing').length;
+  const publishableCount = videos.filter(
+    (v) => v.transcodeStatus === 'ready' && !v.isPublished
+  ).length;
+
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-6">
@@ -205,19 +325,74 @@ export default function AdminVideosPage() {
             Lessons live here. Attach one to a course and only buyers of that course can watch it.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowForm(!showForm)}
-          className="shrink-0 px-4 py-2 bg-[#f53100] text-white text-sm font-semibold rounded hover:bg-[#d42a00]"
-        >
-          {showForm ? 'Cancel' : 'Add a video'}
-        </button>
+        <div className="shrink-0 flex items-center gap-2">
+          {publishableCount > 0 && (
+            <button
+              type="button"
+              onClick={publishAllReady}
+              disabled={Boolean(bulk)}
+              className="px-4 py-2 border border-green-700 text-green-700 text-sm font-semibold rounded hover:bg-green-50 disabled:opacity-50"
+            >
+              Publish {publishableCount} ready
+            </button>
+          )}
+          {unprocessedCount > 0 && (
+            <button
+              type="button"
+              onClick={processAll}
+              disabled={Boolean(bulk)}
+              className="px-4 py-2 border border-[#161E2A] text-[#161E2A] text-sm font-semibold rounded hover:bg-gray-50 disabled:opacity-50"
+            >
+              {bulk
+                ? `${bulk.verb ?? 'Processing'} ${bulk.done} of ${bulk.total}…`
+                : `Process ${unprocessedCount} for streaming`}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowForm(!showForm)}
+            className="px-4 py-2 bg-[#f53100] text-white text-sm font-semibold rounded hover:bg-[#d42a00]"
+          >
+            {showForm ? 'Cancel' : 'Add a video'}
+          </button>
+        </div>
       </div>
 
       {error && (
         <p className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200">
           {error}
         </p>
+      )}
+
+      {bulk && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
+          <div className="h-2 bg-blue-100 rounded overflow-hidden">
+            <div
+              className="h-full bg-blue-600 transition-all"
+              style={{ width: `${Math.round((bulk.done / bulk.total) * 100)}%` }}
+            />
+          </div>
+          <p className="text-sm text-blue-800 mt-2">
+            {bulk.verb ?? 'Processing'} {bulk.done} of {bulk.total}. Keep this tab open.
+          </p>
+        </div>
+      )}
+
+      {!loading && !bulk && (unprocessedCount > 0 || processingCount > 0) && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-900">
+          {unprocessedCount > 0 && (
+            <p>
+              {unprocessedCount} videos have a file you can play here, but no streaming version
+              yet. Customers see nothing on a course page until a video is processed and then
+              published.
+            </p>
+          )}
+          {processingCount > 0 && (
+            <p className={unprocessedCount > 0 ? 'mt-1' : undefined}>
+              {processingCount} are processing now. This page updates on its own as they finish.
+            </p>
+          )}
+        </div>
       )}
 
       {showForm && (
@@ -401,6 +576,17 @@ export default function AdminVideosPage() {
                   >
                     {video.isPublished ? 'Unpublish' : 'Publish'}
                   </button>
+                  {statusOf(video) === 'unprocessed' && (
+                    <button
+                      type="button"
+                      onClick={() => process(video)}
+                      disabled={Boolean(bulk)}
+                      title="Convert this video for streaming so customers can watch it"
+                      className="text-xs px-3 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-40"
+                    >
+                      Process
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setEditing(video.id)}

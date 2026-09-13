@@ -276,10 +276,21 @@ router.post('/:id/upload-url', async (req, res) => {
 // manifest will appear.
 router.post('/:id/transcode', async (req, res) => {
   const video = unwrap(
-    await db().from('videos').select('id').eq('id', req.params.id).maybeSingle(),
+    await db().from('videos').select('id, transcode_status').eq('id', req.params.id).maybeSingle(),
     'load video'
   );
   if (!video) throw notFound('Video not found');
+
+  // Submitting a job for a video with nothing to convert would bill for a
+  // failure, so check the source is really there first.
+  if (!(await objectExists(rawKeyFor(video.id)))) {
+    throw badRequest('There is no uploaded file to process for this video.');
+  }
+
+  // Re-submitting a running job would pay twice for the same output.
+  if (video.transcode_status === 'processing') {
+    throw badRequest('This video is already being processed.');
+  }
 
   const jobId = await submitTranscodeJob(video.id);
 
