@@ -8,9 +8,12 @@ import VideoPlayer from '@/components/VideoPlayer';
 /**
  * Fetches a signed CloudFront URL and plays it. The URL expires after two
  * hours, so it is requested at watch time rather than baked into the page.
+ *
+ * `kind` says what came back: the adaptive streaming version when the video has
+ * been transcoded, otherwise the original upload, which plays as a plain MP4.
  */
 export default function WatchClient({ video }) {
-  const [streamUrl, setStreamUrl] = useState(null);
+  const [stream, setStream] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -18,7 +21,7 @@ export default function WatchClient({ video }) {
 
     api
       .get(`/api/v1/videos/${video.id}/stream`)
-      .then(({ data }) => !cancelled && setStreamUrl(data.url))
+      .then(({ data }) => !cancelled && setStream(data))
       .catch((err) => !cancelled && setError(err.message));
 
     return () => {
@@ -47,8 +50,12 @@ export default function WatchClient({ video }) {
               </p>
             </div>
           </div>
-        ) : streamUrl ? (
-          <VideoPlayer src={streamUrl} poster={video.thumbnailUrl} />
+        ) : stream ? (
+          <VideoPlayer
+            src={stream.url}
+            poster={video.thumbnailUrl}
+            type={stream.kind === 'source' ? 'video/mp4' : 'application/x-mpegURL'}
+          />
         ) : (
           <div className="aspect-video bg-gray-100 rounded-lg flex items-center justify-center">
             <p className="text-gray-400">Loading video…</p>

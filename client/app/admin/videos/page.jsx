@@ -29,18 +29,32 @@ function statusOf(video) {
 
 const STATUS_LABELS = {
   pending: 'No file uploaded',
-  unprocessed: 'Not processed for streaming',
+  unprocessed: 'Ready to play · original',
   processing: 'Processing…',
-  ready: 'Ready to play',
+  ready: 'Ready to play · streaming',
   failed: 'Processing failed',
+};
+
+const STATUS_HINTS = {
+  unprocessed:
+    'Plays from the original upload, at one fixed quality. Fine to publish. ' +
+    'Processing it for streaming is optional and adds smaller versions for slow connections.',
+  ready: 'Has several quality levels, so viewers on slow connections switch down instead of stalling.',
+  failed: 'Conversion failed. The original upload still plays, so this video is still watchable.',
 };
 
 /** How many in-flight transcodes to ask about per polling tick. */
 const POLL_BATCH = 12;
 
+/**
+ * Whether customers can actually watch this. The streaming version is nicer,
+ * but the original upload plays too, so either one is enough to publish.
+ */
+const isPlayable = (video) => video.transcodeStatus === 'ready' || video.hasSourceFile;
+
 const STATUS_STYLES = {
   pending: 'bg-gray-100 text-gray-500',
-  unprocessed: 'bg-amber-100 text-amber-700',
+  unprocessed: 'bg-slate-100 text-slate-600',
   processing: 'bg-blue-100 text-blue-700',
   ready: 'bg-green-100 text-green-700',
   failed: 'bg-red-100 text-red-700',
@@ -229,53 +243,9 @@ export default function AdminVideosPage() {
     }
   };
 
-  /**
-   * Process everything that has a file but no streaming version.
-   *
-   * Two at a time, deliberately: MediaConvert throttles job creation, and the
-   * jobs queue on their own once submitted, so there is nothing to gain by
-   * pushing harder and a throttling error to lose. Several hundred videos take
-   * a few minutes to submit.
-   */
-  const processAll = async () => {
-    const queue = videos.filter(
-      (v) => v.hasSourceFile && v.transcodeStatus !== 'ready' && v.transcodeStatus !== 'processing'
-    );
-    if (!queue.length) return;
-
-    if (
-      !confirm(
-        `Process ${queue.length} videos for streaming?\n\n` +
-          'This runs a paid AWS MediaConvert job for each one and cannot be ' +
-          'cancelled once started. Videos become publishable as they finish, ' +
-          'which takes a few minutes each.'
-      )
-    ) {
-      return;
-    }
-
-    setError('');
-    setBulk({ done: 0, total: queue.length, failed: 0 });
-
-    let cursor = 0;
-    let failed = 0;
-
-    const worker = async () => {
-      while (cursor < queue.length) {
-        const video = queue[cursor++];
-        const ok = await process(video);
-        if (!ok) failed += 1;
-        setBulk({ done: Math.min(cursor, queue.length), total: queue.length, failed });
-      }
-    };
-
-    await Promise.all(Array.from({ length: 2 }, worker));
-    setBulk(null);
-  };
-
-  /** Publish every video that has a streaming version and isn't live yet. */
+  /** Publish everything that is watchable and isn't live yet. */
   const publishAllReady = async () => {
-    const queue = videos.filter((v) => v.transcodeStatus === 'ready' && !v.isPublished);
+    const queue = videos.filter((v) => isPlayable(v) && !v.isPublished);
     if (!queue.length) return;
     if (!confirm(`Publish ${queue.length} videos? They become visible to customers.`)) return;
 
@@ -308,13 +278,8 @@ export default function AdminVideosPage() {
     }
   };
 
-  const unprocessedCount = videos.filter(
-    (v) => v.hasSourceFile && v.transcodeStatus !== 'ready' && v.transcodeStatus !== 'processing'
-  ).length;
   const processingCount = videos.filter((v) => v.transcodeStatus === 'processing').length;
-  const publishableCount = videos.filter(
-    (v) => v.transcodeStatus === 'ready' && !v.isPublished
-  ).length;
+  const publishableCount = videos.filter((v) => isPlayable(v) && !v.isPublished).length;
 
   return (
     <div>
@@ -334,18 +299,6 @@ export default function AdminVideosPage() {
               className="px-4 py-2 border border-green-700 text-green-700 text-sm font-semibold rounded hover:bg-green-50 disabled:opacity-50"
             >
               Publish {publishableCount} ready
-            </button>
-          )}
-          {unprocessedCount > 0 && (
-            <button
-              type="button"
-              onClick={processAll}
-              disabled={Boolean(bulk)}
-              className="px-4 py-2 border border-[#161E2A] text-[#161E2A] text-sm font-semibold rounded hover:bg-gray-50 disabled:opacity-50"
-            >
-              {bulk
-                ? `${bulk.verb ?? 'Processing'} ${bulk.done} of ${bulk.total}…`
-                : `Process ${unprocessedCount} for streaming`}
             </button>
           )}
           <button
@@ -378,17 +331,16 @@ export default function AdminVideosPage() {
         </div>
       )}
 
-      {!loading && !bulk && (unprocessedCount > 0 || processingCount > 0) && (
+      {!loading && !bulk && (publishableCount > 0 || processingCount > 0) && (
         <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-900">
-          {unprocessedCount > 0 && (
+          {publishableCount > 0 && (
             <p>
-              {unprocessedCount} videos have a file you can play here, but no streaming version
-              yet. Customers see nothing on a course page until a video is processed and then
-              published.
+              {publishableCount} videos are watchable but still drafts. Customers see nothing on a
+              course page until you publish them.
             </p>
           )}
           {processingCount > 0 && (
-            <p className={unprocessedCount > 0 ? 'mt-1' : undefined}>
+            <p className={publishableCount > 0 ? 'mt-1' : undefined}>
               {processingCount} are processing now. This page updates on its own as they finish.
             </p>
           )}
@@ -532,11 +484,7 @@ export default function AdminVideosPage() {
                     <h2 className="font-semibold truncate">{video.title}</h2>
                     <span
                       className={`text-[10px] px-2 py-0.5 rounded ${STATUS_STYLES[statusOf(video)]}`}
-                      title={
-                        statusOf(video) === 'unprocessed'
-                          ? 'The file is uploaded and you can play it here. Customers need it processed for streaming first.'
-                          : undefined
-                      }
+                      title={STATUS_HINTS[statusOf(video)]}
                     >
                       {STATUS_LABELS[statusOf(video)]}
                     </span>
@@ -564,13 +512,11 @@ export default function AdminVideosPage() {
                   <button
                     type="button"
                     onClick={() => togglePublished(video)}
-                    disabled={video.transcodeStatus !== 'ready' && !video.isPublished}
+                    disabled={!isPlayable(video) && !video.isPublished}
                     title={
-                      video.transcodeStatus === 'ready'
+                      isPlayable(video)
                         ? undefined
-                        : statusOf(video) === 'unprocessed'
-                          ? 'This video has to be processed for streaming before customers can watch it.'
-                          : 'Wait until processing finishes'
+                        : 'Upload a file for this video before publishing it.'
                     }
                     className="text-xs px-3 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-40"
                   >
@@ -581,7 +527,7 @@ export default function AdminVideosPage() {
                       type="button"
                       onClick={() => process(video)}
                       disabled={Boolean(bulk)}
-                      title="Convert this video for streaming so customers can watch it"
+                      title="Optional: pay AWS to add smaller quality levels for slow connections"
                       className="text-xs px-3 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-40"
                     >
                       Process

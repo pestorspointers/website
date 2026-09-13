@@ -38,6 +38,33 @@ function rawKeyFor(videoId) {
   return `uploads/raw/${videoId}/original.mp4`;
 }
 
+/**
+ * A playable URL for an original upload.
+ *
+ * CloudFront whenever it is configured, so these bytes come from the CDN like
+ * everything else and are cached near the viewer. The presigned S3 URL is a
+ * development fallback for machines with no CloudFront key pair.
+ */
+async function signSourceUrl(key, expiresIn) {
+  const cloudFrontReady =
+    process.env.CLOUDFRONT_DOMAIN &&
+    process.env.CLOUDFRONT_KEY_PAIR_ID &&
+    process.env.CLOUDFRONT_PRIVATE_KEY;
+
+  if (cloudFrontReady) {
+    try {
+      return signCloudFrontUrl(key, expiresIn);
+    } catch (err) {
+      // A malformed key pair would otherwise take down playback entirely. S3
+      // can serve the same object directly, so fall back and make the reason
+      // loud rather than leaving customers with a broken player.
+      console.error('CloudFront signing failed, serving from S3 instead:', err.message);
+    }
+  }
+
+  return getSignedUrl(s3(), new GetObjectCommand({ Bucket: bucket(), Key: key }), { expiresIn });
+}
+
 async function objectExists(key) {
   try {
     await s3().send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
@@ -118,30 +145,26 @@ router.get('/:id/stream', authenticate, async (req, res) => {
 
   const expiresIn = 7200;
 
-  if (!video.s3_key || video.transcode_status !== 'ready') {
-    // Nothing has been transcoded, but the original upload is still sitting in
-    // the bucket and plays on its own. Let an admin watch that directly so the
-    // library is reviewable without waiting on MediaConvert. Customers still
-    // get the streaming version or nothing — the source file is a single large
-    // object with no adaptive bitrate, which is fine for one admin and wrong
-    // for an audience.
-    if (isAdmin(req.user)) {
-      const rawKey = rawKeyFor(video.id);
-      if (await objectExists(rawKey)) {
-        const url = await getSignedUrl(
-          s3(),
-          new GetObjectCommand({ Bucket: bucket(), Key: rawKey }),
-          { expiresIn }
-        );
-        return res.json({ url, kind: 'source', expiresIn });
-      }
-      throw badRequest('No video file has been uploaded for this video yet.');
-    }
-
-    throw badRequest('This video is still processing. Check back shortly.');
+  // The adaptive-bitrate version when one exists: several renditions, so a
+  // viewer on a weak connection drops to a smaller one instead of stalling.
+  if (video.s3_key && video.transcode_status === 'ready') {
+    return res.json({ url: signCloudFrontUrl(video.s3_key, expiresIn), kind: 'hls', expiresIn });
   }
 
-  res.json({ url: signCloudFrontUrl(video.s3_key, expiresIn), kind: 'hls', expiresIn });
+  // Otherwise the original upload, which plays perfectly well on its own. It is
+  // one fixed quality at the full source bitrate, so it is heavier than a
+  // transcode would be, but serving it is what makes a video watchable at all
+  // without paying to convert the whole library first.
+  const rawKey = rawKeyFor(video.id);
+  if (await objectExists(rawKey)) {
+    return res.json({ url: await signSourceUrl(rawKey, expiresIn), kind: 'source', expiresIn });
+  }
+
+  throw badRequest(
+    isAdmin(req.user)
+      ? 'No video file has been uploaded for this video yet.'
+      : 'This video is not available yet.'
+  );
 });
 
 // Lets the watch page decide what to render before it asks for a stream.

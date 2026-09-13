@@ -13,15 +13,15 @@ import ImageField from '@/components/admin/ImageField';
  */
 
 /**
- * Says what a video's transcode state means rather than echoing the raw value.
- * `pending` in particular reads as "nothing here" when it usually means the
- * file is uploaded but has never been converted for streaming.
+ * Says what a video's playback state means rather than echoing the raw value.
+ * A video with an original upload is watchable whether or not it was ever
+ * converted for streaming, so both count as ready here.
  */
 function playbackLabel(video) {
-  if (video.transcodeStatus === 'ready') return 'Ready to play';
+  if (video.transcodeStatus === 'ready') return 'Ready to play · streaming';
   if (video.transcodeStatus === 'processing') return 'Processing…';
-  if (video.transcodeStatus === 'failed') return 'Processing failed';
-  return video.hasSourceFile ? 'Not processed for streaming' : 'No file uploaded';
+  if (video.hasSourceFile) return 'Ready to play · original';
+  return 'No file uploaded';
 }
 export default function AdminCourseEditPage() {
   const { id } = useParams();
